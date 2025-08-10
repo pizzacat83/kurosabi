@@ -15,12 +15,35 @@ use wasabi::serial::SerialPort;
 
 #[no_mangle]
 fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
+    let mut sw = SerialPort::new_for_com1();
+
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
 
     let vw = vram.width;
     let vh = vram.height;
 
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill rect failed");
+
+    let memory_map = efi_system_table
+        .boot_services
+        .get_memory_map()
+        .expect("failed to get memory map");
+
+    let mut total_memory_pages = 0;
+    for e in memory_map.iter() {
+        if e.memory_type != EfiMemoryType::CONVENTIONAL_MEMORY {
+            continue;
+        }
+        writeln!(sw, "{e:?}").unwrap();
+        total_memory_pages += e.number_of_pages;
+    }
+
+    let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
+    writeln!(
+        sw,
+        "Total: {total_memory_pages} pages = {total_memory_size_mib} MiB"
+    )
+    .unwrap();
 
     // println!("Hello, world!");
     loop {
@@ -162,7 +185,15 @@ const _: () = assert!(offset_of!(EfiSystemTable, boot_services) == 96);
 /// https://uefi.org/specs/UEFI/2.10/04_EFI_System_Table.html#efi-boot-services-table
 #[repr(C)]
 struct EfiBootServicesTable {
-    _reserved0: [u64; 40],
+    _reserved0: [u64; 7],
+    get_memory_map: extern "win64" fn(
+        memory_map_size: *mut usize,
+        memory_map: *mut u8,
+        map_key: *mut usize,
+        descriptor_size: *mut usize,
+        descriptor_version: *mut u32,
+    ) -> EfiStatus,
+    _reserved1: [u64; 32],
     // https://uefi.org/specs/UEFI/2.11/07_Services_Boot_Services.html#efi-boot-services-locateprotocol
     locate_protocol: extern "win64" fn(
         protocol: *const EfiGuid,
@@ -171,7 +202,116 @@ struct EfiBootServicesTable {
     ) -> EfiStatus,
 }
 
+const _: () = assert!(offset_of!(EfiBootServicesTable, get_memory_map) == 56);
 const _: () = assert!(offset_of!(EfiBootServicesTable, locate_protocol) == 320);
+
+impl EfiBootServicesTable {
+    fn get_memory_map(&self) -> Result<MemoryMapHolder> {
+        let mut holder = MemoryMapHolder::default();
+        let status = (self.get_memory_map)(
+            &mut holder.memory_map_size,
+            holder.memory_map_buffer.as_mut_ptr(),
+            &mut holder.map_key,
+            &mut holder.descriptor_size,
+            &mut holder.descriptor_version,
+        );
+        if status != EfiStatus::Success {
+            return Err("failed to get memory map");
+        }
+
+        Ok(holder)
+    }
+}
+
+struct MemoryMapHolder {
+    memory_map_buffer: [u8; MEMORY_MAP_BUFFER_SIZE],
+    memory_map_size: usize,
+    map_key: usize,
+    descriptor_size: usize,
+    descriptor_version: u32,
+}
+impl MemoryMapHolder {
+    fn iter(&self) -> MemoryMapIterator {
+        MemoryMapIterator {
+            map: self,
+            offset: 0,
+        }
+    }
+}
+
+const MEMORY_MAP_BUFFER_SIZE: usize = 0x8000;
+
+impl Default for MemoryMapHolder {
+    fn default() -> Self {
+        Self {
+            memory_map_buffer: [0; MEMORY_MAP_BUFFER_SIZE],
+            memory_map_size: MEMORY_MAP_BUFFER_SIZE,
+            map_key: 0,
+            descriptor_size: 0,
+            descriptor_version: 0,
+        }
+    }
+}
+
+struct MemoryMapIterator<'a> {
+    map: &'a MemoryMapHolder,
+    offset: usize,
+}
+
+impl<'a> Iterator for MemoryMapIterator<'a> {
+    type Item = &'a EfiMemoryDescriptor;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.map.memory_map_size {
+            None
+        } else {
+            let e: &EfiMemoryDescriptor = unsafe {
+                &*(self.map.memory_map_buffer.as_ptr().add(self.offset)
+                    as *const EfiMemoryDescriptor)
+            };
+            self.offset += self.map.descriptor_size;
+            Some(e)
+        }
+    }
+}
+
+/// https://uefi.org/specs/UEFI/2.10/07_Services_Boot_Services.html#:~:text=Attribute%3B%0A%20%20%7D-,EFI_MEMORY_DESCRIPTOR,-%3B
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct EfiMemoryDescriptor {
+    memory_type: EfiMemoryType,
+    physical_start: EfiPhysicalAddress,
+    virtual_start: EfiVirtualAddress,
+    number_of_pages: u64,
+    attribute: u64,
+}
+
+#[repr(i64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum EfiMemoryType {
+    RESERVED = 0,
+    LOADER_CODE,
+    LOADER_DATA,
+    BOOT_SERVICES_CODE,
+    BOOT_SERVICES_DATA,
+    RUNTIME_SERVICES_CODE,
+    RUNTIME_SERVICES_DATA,
+    CONVENTIONAL_MEMORY,
+    UNUSABLE_MEMORY,
+    ACPI_RECLAIM_MEMORY,
+    ACPI_MEMORY_NVS,
+    MEMORY_MAPPED_IO,
+    MEMORY_MAPPED_IO_PORT_SPACE,
+    PAL_CODE,
+    PERSISTENT_MEMORY,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EfiPhysicalAddress(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EfiVirtualAddress(u64);
 
 /// https://uefi.org/specs/UEFI/2.11/12_Protocols_Console_Support.html#efi-graphics-output-protocol
 const EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID: EfiGuid = EfiGuid {
