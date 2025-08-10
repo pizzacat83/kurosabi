@@ -119,7 +119,7 @@ enum EfiStatus {
 struct EfiHandle(usize);
 
 /// https://uefi.org/specs/UEFI/2.11/02_Overview.html
-struct EfiVoid(u8);
+struct EfiVoid();
 
 use core::{
     mem::{offset_of, size_of},
