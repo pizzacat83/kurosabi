@@ -5,10 +5,13 @@
 use core::arch::asm;
 use core::cmp::min;
 use core::{
+    fmt::Write,
     mem::{offset_of, size_of},
     panic::PanicInfo,
     ptr::null_mut,
 };
+
+use wasabi::serial::SerialPort;
 
 #[no_mangle]
 fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -243,7 +246,9 @@ struct EfiHandle(usize);
 struct EfiVoid();
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    let mut sw = SerialPort::new_for_com1();
+    writeln!(sw, "PANIC: {info:?}").unwrap();
     loop {}
 }
 
