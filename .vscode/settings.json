@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.cargo.allTargets": false,
+    "github.copilot.enable": {
+        "*": false,
+        "plaintext": true,
+        "markdown": true,
+        "rust": false
+    },
+}
