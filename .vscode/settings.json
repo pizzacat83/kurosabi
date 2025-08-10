@@ -6,4 +6,5 @@
         "markdown": true,
         "rust": false
     },
+    "explorer.sortOrder": "mixed",
 }
