@@ -221,6 +221,10 @@ impl EfiMemoryDescriptor {
     pub fn number_of_pages(&self) -> u64 {
         self.number_of_pages
     }
+
+    pub fn physical_start(&self) -> EfiPhysicalAddress {
+        self.physical_start
+    }
 }
 
 #[repr(i64)]
@@ -245,7 +249,13 @@ pub enum EfiMemoryType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EfiPhysicalAddress(u64);
+pub struct EfiPhysicalAddress(u64);
+
+impl From<EfiPhysicalAddress> for usize {
+    fn from(value: EfiPhysicalAddress) -> Self {
+        value.0 as usize
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EfiVirtualAddress(u64);
