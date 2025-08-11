@@ -22,3 +22,7 @@ pub fn read_io_port_u8(port: u16) -> u8 {
 pub fn busy_loop_hint() {
     unsafe { asm!("pause") }
 }
+
+pub fn hlt() {
+    unsafe { asm!("hlt") }
+}
