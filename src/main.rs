@@ -12,6 +12,7 @@ use core::{
 };
 
 use wasabi::serial::SerialPort;
+use wasabi::warn;
 
 #[no_mangle]
 fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -216,6 +217,8 @@ impl EfiBootServicesTable {
             &mut holder.descriptor_version,
         );
         if status != EfiStatus::Success {
+            // Since we don't have access to alloc yet, we just print the error to the log
+            warn!("get_memory_map failed: {status:?}");
             return Err("failed to get memory map");
         }
 
