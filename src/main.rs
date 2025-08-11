@@ -12,10 +12,10 @@ use core::{
 };
 
 use wasabi::serial::SerialPort;
-use wasabi::warn;
+use wasabi::{info, println, warn};
 
 #[no_mangle]
-fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
+fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     let mut sw = SerialPort::new_for_com1();
 
     let mut vram = init_vram(efi_system_table).expect("init_vram failed");
@@ -25,9 +25,11 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill rect failed");
 
-    let memory_map = efi_system_table
+    let mut memory_map = MemoryMapHolder::default();
+
+    efi_system_table
         .boot_services
-        .get_memory_map()
+        .get_memory_map(&mut memory_map)
         .expect("failed to get memory map");
 
     let mut total_memory_pages = 0;
@@ -46,7 +48,11 @@ fn efi_main(_image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     )
     .unwrap();
 
-    // println!("Hello, world!");
+    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map)
+        .expect("failed to exit boot services");
+
+    println!("Hello from the world without boot service!");
+
     loop {
         hlt();
     }
@@ -194,7 +200,9 @@ struct EfiBootServicesTable {
         descriptor_size: *mut usize,
         descriptor_version: *mut u32,
     ) -> EfiStatus,
-    _reserved1: [u64; 32],
+    _reserved1: [u64; 21],
+    exit_boot_services: extern "win64" fn(image_handle: EfiHandle, map_key: usize) -> EfiStatus,
+    _reserved2: [u64; 10],
     // https://uefi.org/specs/UEFI/2.11/07_Services_Boot_Services.html#efi-boot-services-locateprotocol
     locate_protocol: extern "win64" fn(
         protocol: *const EfiGuid,
@@ -204,11 +212,36 @@ struct EfiBootServicesTable {
 }
 
 const _: () = assert!(offset_of!(EfiBootServicesTable, get_memory_map) == 56);
+const _: () = assert!(offset_of!(EfiBootServicesTable, exit_boot_services) == 232);
 const _: () = assert!(offset_of!(EfiBootServicesTable, locate_protocol) == 320);
 
+fn exit_from_efi_boot_services(
+    image_handle: EfiHandle,
+    efi_system_table: &EfiSystemTable,
+    memory_map: &mut MemoryMapHolder,
+) -> Result<()> {
+    loop {
+        let result = efi_system_table
+            .boot_services
+            .exit_boot_services(image_handle, memory_map.map_key);
+        match result {
+            Ok(_) => {
+                break;
+            }
+            Err(error) => {
+                // Ideally we should check if the error is EFI_INVALID_PARAMETER,
+                // but I'm too lazy to do this.
+                info!("Retrying exit_boot_services after refreshing memory map; error: {error}");
+                efi_system_table.boot_services.get_memory_map(memory_map)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl EfiBootServicesTable {
-    fn get_memory_map(&self) -> Result<MemoryMapHolder> {
-        let mut holder = MemoryMapHolder::default();
+    fn get_memory_map(&self, holder: &mut MemoryMapHolder) -> Result<()> {
         let status = (self.get_memory_map)(
             &mut holder.memory_map_size,
             holder.memory_map_buffer.as_mut_ptr(),
@@ -222,7 +255,17 @@ impl EfiBootServicesTable {
             return Err("failed to get memory map");
         }
 
-        Ok(holder)
+        Ok(())
+    }
+
+    fn exit_boot_services(&self, image_handle: EfiHandle, memory_map_key: usize) -> Result<()> {
+        let status = (self.exit_boot_services)(image_handle, memory_map_key);
+        if status != EfiStatus::Success {
+            // Since we don't have access to alloc yet, we just print the error to the log
+            warn!("exit_boot_services failed: {status:?}");
+            return Err("failed to exit boot services");
+        }
+        Ok(())
     }
 }
 
@@ -367,6 +410,7 @@ struct EfiGuid {
     pub data3: [u8; 8],
 }
 
+// TODO: I think this does not model the error code well.
 /// https://uefi.org/specs/UEFI/2.10/Apx_D_Status_Codes.html
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[must_use]
@@ -376,6 +420,8 @@ enum EfiStatus {
 }
 
 /// https://uefi.org/specs/UEFI/2.10/02_Overview.html#:~:text=code.%20Type%20UINTN.-,EFI_HANDLE,-A%20collection%20of
+#[derive(Clone, Copy)]
+#[repr(transparent)]
 struct EfiHandle(usize);
 
 /// https://uefi.org/specs/UEFI/2.11/02_Overview.html
