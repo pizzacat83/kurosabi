@@ -1,10 +1,7 @@
 {
-    "rust-analyzer.cargo.allTargets": false,
+    // "rust-analyzer.cargo.allTargets": false,
     "github.copilot.enable": {
-        "*": false,
-        "plaintext": true,
-        "markdown": true,
-        "rust": false
+        "rust": false,
     },
     "explorer.sortOrder": "mixed",
 }
