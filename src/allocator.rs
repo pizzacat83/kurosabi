@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use core::mem::size_of_val;
 use core::{
     alloc::GlobalAlloc, borrow::BorrowMut, cell::RefCell, cmp::max, mem::size_of, ops::DerefMut,
     ptr::null_mut,
@@ -8,7 +9,7 @@ use core::{
 
 use crate::result::Result;
 use crate::uefi::{EfiMemoryDescriptor, EfiMemoryType, MemoryMapHolder};
-use crate::{dbg, println};
+use crate::{dbg, info, println};
 
 pub struct FirstFitAllocator {
     // Oh, can we use Box in the allocator itself!?
@@ -115,18 +116,33 @@ impl Header {
     }
 
     // util for testing
-    fn new_from_slice(slice: &mut [u8]) -> Result<Box<Self>> {
-        let header = slice.as_mut_ptr() as *mut Header;
+    // the chunk will be aligned for test reproducibility.
+    fn new_from_slice_aligned(slice: &mut [u8], align: usize) -> Result<Box<Self>> {
+        let unaligned_start = slice.as_mut_ptr() as usize;
+        let unaligned_end = unaligned_start + size_of_val(slice);
+        let aligned_start = (unaligned_start + align) & !(align - 1);
+        let aligned_end = unaligned_end & !(align - 1);
+
+        let aligned_size = aligned_end
+            .checked_sub(aligned_start)
+            .ok_or("slice too small")?;
+
+        info!(
+            "shifted start from {:#x}:{:#x} to {:#x}:{:#x}",
+            unaligned_start, aligned_start, aligned_start, aligned_end
+        );
 
         // TODO: is this check enough for safety?
-        if slice.len() < HEADER_SIZE {
+        if aligned_size < HEADER_SIZE {
             return Err("slice too small");
         }
+
+        let header = aligned_start as *mut Header;
 
         unsafe {
             header.write(Header {
                 next_header: None,
-                size: slice.len(),
+                size: aligned_size,
                 is_allocated: false,
                 _reserved: 0,
             });
@@ -191,29 +207,75 @@ impl Header {
     fn end_addr(&self) -> usize {
         self as *const Header as usize + self.size
     }
+
+    fn iter(&self) -> ChunkIterator {
+        ChunkIterator {
+            current: Some(self),
+        }
+    }
 }
 
 #[test_case]
 fn test_provide() {
-    let mut buf = [0u8; 2 << 16]; // 131kb
-    let mut header = Header::new_from_slice(&mut buf).expect("failed to create header");
-    {
+    let requested_size = 32;
+    let requested_align = 32;
+
+    let mut buf = [0u8; 1 << 16]; // 131kb
+    let header =
+        Header::new_from_slice_aligned(&mut buf, 1 << 10).expect("failed to create header");
+
+    println!(
+        "Test header: start={:?}, end={:?}",
+        header.start_addr() as *const Header,
+        header.end_addr() as *const Header
+    );
+
+    dbg!(&header);
+
+    for h in header.iter() {
         println!(
-            "Test header: start={:?}, end={:?}",
-            header.start_addr() as *const Header,
-            header.end_addr() as *const Header
+            "{:?}:{:?} (size: {}) is_allocated={}",
+            h.start_addr() as *const Header,
+            h.end_addr() as *const Header,
+            h.size,
+            h.is_allocated
         );
     }
     dbg!(&header);
 
-    let requested_size = 32;
-    let requested_align = 32;
+    let mut header = header;
 
     let res = header.provide(requested_size, requested_align);
 
     dbg!(&header);
 
     dbg!(&res);
+
+    for h in header.iter() {
+        println!(
+            "{:?}:{:?} (size: {}) is_allocated={}",
+            h.start_addr() as *const Header,
+            h.end_addr() as *const Header,
+            h.size,
+            h.is_allocated
+        );
+    }
+}
+
+struct ChunkIterator<'a> {
+    current: Option<&'a Header>,
+}
+
+impl<'a> Iterator for ChunkIterator<'a> {
+    type Item = &'a Header;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(next) = self.current.and_then(|h| h.next_header.as_ref()) {
+            self.current.replace(next.as_ref())
+        } else {
+            self.current.take()
+        }
+    }
 }
 
 fn round_up_to_nearest_pow2(v: usize) -> Result<usize> {
