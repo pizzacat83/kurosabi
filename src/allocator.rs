@@ -28,6 +28,10 @@ static ALLOCATOR: FirstFitAllocator = FirstFitAllocator {
     first_header: RefCell::new(None),
 };
 
+pub fn init_with_mmap(memory_map: &MemoryMapHolder) {
+    ALLOCATOR.init_with_mmap(memory_map);
+}
+
 unsafe impl GlobalAlloc for FirstFitAllocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         self.alloc_with_options(layout)

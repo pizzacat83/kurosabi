@@ -3,6 +3,7 @@
 #![feature(offset_of)]
 
 use wasabi::graphics::{fill_rect, Bitmap};
+use wasabi::init::init_basic_runtime;
 use wasabi::println;
 use wasabi::uefi::{
     exit_from_efi_boot_services, init_vram, EfiHandle, EfiMemoryType, EfiSystemTable,
@@ -19,12 +20,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill rect failed");
 
-    let mut memory_map = MemoryMapHolder::default();
-
-    efi_system_table
-        .boot_services
-        .get_memory_map(&mut memory_map)
-        .expect("failed to get memory map");
+    let memory_map = init_basic_runtime(image_handle, efi_system_table);
 
     let mut total_memory_pages = 0;
     for e in memory_map.iter() {
@@ -37,9 +33,6 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     let total_memory_size_mib = total_memory_pages * 4096 / 1024 / 1024;
     println!("Total: {total_memory_pages} pages = {total_memory_size_mib} MiB");
-
-    exit_from_efi_boot_services(image_handle, efi_system_table, &mut memory_map)
-        .expect("failed to exit boot services");
 
     println!("Hello from the world without boot service!");
 
