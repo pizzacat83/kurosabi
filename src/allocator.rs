@@ -2,11 +2,11 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::mem::size_of_val;
-use core::slice;
 use core::{
     alloc::GlobalAlloc, borrow::BorrowMut, cell::RefCell, cmp::max, mem::size_of, ops::DerefMut,
     ptr::null_mut,
 };
+use core::{fmt, slice};
 
 use crate::print::hexdump_bytes;
 use crate::result::Result;
@@ -34,7 +34,11 @@ unsafe impl GlobalAlloc for FirstFitAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        // TODO
+        let mut region = Header::from_allocated_region(ptr);
+        region.is_allocated = false;
+
+        // Intentionally leak the box, since Box<Header> must not be dropped
+        Box::leak(region);
     }
 }
 
@@ -95,7 +99,6 @@ impl FirstFitAllocator {
     }
 }
 
-#[derive(Debug)]
 pub struct Header {
     next_header: Option<Box<Header>>,
     size: usize,
@@ -112,10 +115,20 @@ impl Header {
         let header = addr as *mut Header;
         header.write(Header {
             next_header: None,
-            size: 0,
+            size: 0, // This is invalid. The size must be bigger than HEADER_SIZE.
             is_allocated: false,
             _reserved: 0,
         });
+        Box::from_raw(header)
+    }
+
+    /// The box must not be dropped; use Box::leak.
+    unsafe fn from_allocated_region(payload_start_addr: *mut u8) -> Box<Header> {
+        let header = payload_start_addr.sub(HEADER_SIZE) as *mut Header;
+
+        // TODO: this makes aliasing, right? the global allocator owns the header list (as a linked list of Boxes)
+        // but this function makes another box of the same pointer.
+        // Can we make it less unsafe? Like using a different return type
         Box::from_raw(header)
     }
 
@@ -156,6 +169,7 @@ impl Header {
     }
 
     fn provide(&mut self, size: usize, align: usize) -> Option<*mut u8> {
+        // TODO: why pow2? of the size excluding the header?
         let size_excluding_header = max(round_up_to_nearest_pow2(size).ok()?, HEADER_SIZE);
         let align = max(align, HEADER_SIZE);
 
@@ -227,6 +241,7 @@ impl Header {
     fn can_provide(&self, size_excluding_header: usize, align: usize) -> bool {
         // This check is rough - actual size needed may be smaller.
         // HEADER_SIZE * 2 => one for allocated region, another for padding.
+
         self.size >= size_excluding_header + HEADER_SIZE * 2 + align
     }
 
@@ -272,6 +287,30 @@ impl Header {
     }
 }
 
+impl Drop for Header {
+    fn drop(&mut self) {
+        // Header prohibits being dropped, because self.next_header: Option<Box<Header>> must not be dropped.
+        // Dropping Box<Header> would try to call GlobalAlloc's dealloc, but the Box for header is not allocated by GlobalAlloc.
+        // TODO: should we use a different type than Box for the header list?
+        // [Writing an OS in Rust](https://os.phil-opp.com/allocator-designs/#linked-list-allocator) uses &'static mut T
+        // TODO: comment out this line and see what happens
+
+        panic!("Header must not be dropped");
+    }
+}
+
+impl fmt::Debug for Header {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Header @ {:#018x} {{ size_including_header: {:#018x}, is_allocated: {} }}",
+            self as *const Header as usize,
+            self.size_including_header(),
+            self.is_allocated,
+        )
+    }
+}
+
 #[test_case]
 /// Test the internal behavior of provide().
 fn test_provide_internal() {
@@ -288,21 +327,23 @@ fn test_provide_internal() {
         header.end_addr() as *const Header
     );
 
-    for h in header.iter() {
-        println!(
-            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
-            h.start_addr() as *const Header,
-            h.end_addr() as *const Header,
-            h.start_addr() - heap_start,
-            h.end_addr() - heap_start,
-            h.size,
-            h.is_allocated
-        );
-    }
-    for h in header.iter() {
-        println!("Header size={:#06x}:", h.size);
-        h.hexdump();
-    }
+    dbg!(&header);
+
+    // for h in header.iter() {
+    //     println!(
+    //         "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
+    //         h.start_addr() as *const Header,
+    //         h.end_addr() as *const Header,
+    //         h.start_addr() - heap_start,
+    //         h.end_addr() - heap_start,
+    //         h.size,
+    //         h.is_allocated
+    //     );
+    // }
+    // for h in header.iter() {
+    //     println!("Header size={:#06x}:", h.size);
+    //     h.hexdump();
+    // }
 
     let mut header = header;
 
@@ -430,6 +471,9 @@ fn test_provide_internal() {
                 + allocated1.size_including_header(),
         );
     }
+
+    // Follow the requirement that header must not be dropped
+    Box::leak(header);
 }
 
 struct ChunkIterator<'a> {
