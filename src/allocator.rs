@@ -13,6 +13,8 @@ use crate::result::Result;
 use crate::uefi::{EfiMemoryDescriptor, EfiMemoryType, MemoryMapHolder};
 use crate::{dbg, info, println};
 
+// TODO: compare with [Writing an OS in Rust](https://os.phil-opp.com/allocator-designs/#linked-list-allocator)
+
 pub struct FirstFitAllocator {
     // Oh, can we use Box in the allocator itself!?
     first_header: RefCell<Option<Box<Header>>>,
