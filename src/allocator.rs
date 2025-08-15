@@ -103,6 +103,8 @@ pub struct Header {
     _reserved: usize,
 }
 impl Header {
+    /// Initializes a Header at the given address.
+    ///
     /// # Safety
     /// ???
     /// TODO: fill here
@@ -277,6 +279,9 @@ fn test_provide_internal() {
     let header = Header::new_from_slice_aligned(&mut buf, 1 << 10, 1 << 10)
         .expect("failed to create header");
 
+    // The start of the aligned area.
+    let heap_start = header.start_addr();
+
     println!(
         "Test header: start={:?}, end={:?}",
         header.start_addr() as *const Header,
@@ -290,8 +295,8 @@ fn test_provide_internal() {
             "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
             h.start_addr() as *const Header,
             h.end_addr() as *const Header,
-            0,
-            h.end_addr() - h.start_addr(),
+            h.start_addr() - heap_start,
+            h.end_addr() - heap_start,
             h.size,
             h.is_allocated
         );
@@ -325,8 +330,8 @@ fn test_provide_internal() {
             "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
             h.start_addr() as *const Header,
             h.end_addr() as *const Header,
-            0,
-            h.end_addr() - h.start_addr(),
+            h.start_addr() - heap_start,
+            h.end_addr() - heap_start,
             h.size,
             h.is_allocated
         );
@@ -389,8 +394,8 @@ fn test_provide_internal() {
             "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
             h.start_addr() as *const Header,
             h.end_addr() as *const Header,
-            0,
-            h.end_addr() - h.start_addr(),
+            h.start_addr() - heap_start,
+            h.end_addr() - heap_start,
             h.size,
             h.is_allocated
         );
