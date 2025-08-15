@@ -323,7 +323,7 @@ fn test_provide_internal() {
 
     dbg!(&res);
 
-    let allocated_addr = res.unwrap();
+    let allocated1_addr = res.unwrap();
 
     for h in header.iter() {
         println!(
@@ -353,7 +353,7 @@ fn test_provide_internal() {
         assert!(allocated.is_allocated);
         assert!(!remaining.is_allocated);
 
-        assert_eq!(allocated_addr as usize, allocated.payload_start_addr());
+        assert_eq!(allocated1_addr as usize, allocated.payload_start_addr());
         assert_eq!(original_header_end, allocated.end_addr());
         assert_eq!(original_header_start, remaining.start_addr());
         assert_eq!(remaining.end_addr(), allocated.start_addr());
@@ -387,7 +387,7 @@ fn test_provide_internal() {
 
     dbg!(&res);
 
-    let allocated_addr = res.unwrap();
+    let allocated2_addr = res.unwrap();
 
     for h in header.iter() {
         println!(
@@ -403,6 +403,43 @@ fn test_provide_internal() {
     for h in header.iter() {
         println!("Header size={:#06x}:", h.size);
         h.hexdump();
+    }
+
+    {
+        let mut it = header.iter();
+
+        let remaining = it.next().unwrap();
+        let allocated2 = it.next().unwrap();
+        let padding = it.next().unwrap();
+        let allocated1 = it.next().unwrap();
+        assert!(it.next().is_none());
+
+        // The last chunk is the one we allocated in Step 1.
+        assert_eq!(allocated1_addr as usize, allocated1.payload_start_addr());
+
+        // The original header is separated into (remaining, allocated2, padding).
+        assert!(!remaining.is_allocated);
+        assert!(allocated2.is_allocated);
+        assert!(!padding.is_allocated);
+
+        assert_eq!(original_header_start, remaining.start_addr());
+        assert_eq!(remaining.end_addr(), allocated2.start_addr());
+        assert_eq!(allocated2.end_addr(), padding.start_addr());
+        assert_eq!(padding.end_addr(), allocated1.start_addr());
+
+        assert_eq!(allocated2_addr as usize, allocated2.payload_start_addr());
+
+        // The header for the allocated chunk has the request size
+        assert_eq!(requested_size, allocated2.size_excluding_header());
+
+        // The header for the remaining chunk has the remaining size
+        assert_eq!(
+            original_size_including_header,
+            remaining.size_including_header()
+                + allocated2.size_including_header()
+                + padding.size_including_header()
+                + allocated1.size_including_header(),
+        );
     }
 }
 
