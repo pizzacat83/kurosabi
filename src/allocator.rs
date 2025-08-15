@@ -171,15 +171,20 @@ impl Header {
         //                                      ^ header_for_allocated.end_addr()
         // self has enough space to allocate the requested object.
 
-        let mut size_used = 0;
+        // The payload start address must be aligned as requested.
+        let allocated_payload_addr = (self.end_addr() - size_excluding_header) & !(align - 1);
+        let allocated_header_start = allocated_payload_addr - HEADER_SIZE;
 
-        let allocated_addr = (self.end_addr() - size_excluding_header) & !(align - 1);
-
-        let mut header_for_allocated = unsafe { Self::new_from_addr(allocated_addr - HEADER_SIZE) };
+        let mut header_for_allocated = unsafe { Self::new_from_addr(allocated_header_start) };
         header_for_allocated.is_allocated = true;
         header_for_allocated.set_size_including_header(size_excluding_header + HEADER_SIZE);
         header_for_allocated.next_header = self.next_header.take();
-        size_used += header_for_allocated.size_including_header();
+
+        // Shrink self
+        // The following assertion should be guaranteed by can_provide()
+        assert!(self.start_addr() <= allocated_header_start);
+        // TODO: this should be refactored as "set_end_addr()"?
+        self.set_size_including_header(allocated_header_start - self.start_addr());
 
         if header_for_allocated.end_addr() != self.end_addr() {
             // Due to alignment, there is a free space after header_for_allocated until the end of self.
@@ -191,9 +196,8 @@ impl Header {
             let mut header_for_padding =
                 unsafe { Self::new_from_addr(header_for_allocated.end_addr()) };
             header_for_padding.is_allocated = false;
-            header_for_padding.size = self.end_addr() - header_for_allocated.end_addr();
-
-            size_used += header_for_padding.size;
+            header_for_padding
+                .set_size_including_header(self.end_addr() - header_for_allocated.end_addr());
 
             {
                 // Before:
@@ -213,18 +217,15 @@ impl Header {
             // After: self -> allocated -> self_original_next
         }
 
-        // Shrink self
-        assert!(self.size >= size_used + HEADER_SIZE);
-        self.set_size_including_header(self.size_including_header() - size_used);
         self.next_header = Some(header_for_allocated);
 
-        Some(allocated_addr as *mut u8)
+        Some(allocated_payload_addr as *mut u8)
     }
 
-    fn can_provide(&self, size: usize, align: usize) -> bool {
+    fn can_provide(&self, size_excluding_header: usize, align: usize) -> bool {
         // This check is rough - actual size needed may be smaller.
         // HEADER_SIZE * 2 => one for allocated region, another for padding.
-        self.size >= size + HEADER_SIZE * 2 + align
+        self.size >= size_excluding_header + HEADER_SIZE * 2 + align
     }
 
     fn size_including_header(&self) -> usize {
@@ -364,6 +365,39 @@ fn test_provide_internal() {
             original_size_including_header,
             allocated.size_including_header() + remaining.size_including_header()
         );
+    }
+
+    // 2. Allocation leaves padding
+
+    // We will allocate memory of size 128(+header) with align=128.
+    // Since we allocated a chunk of total size 64 in Step 1,
+    // we cannot allocate the tail of the remaining chunk.
+
+    let requested_size = 128;
+    let requested_align = 128;
+
+    let res = header.provide(requested_size, requested_align);
+
+    dbg!(&header);
+
+    dbg!(&res);
+
+    let allocated_addr = res.unwrap();
+
+    for h in header.iter() {
+        println!(
+            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
+            h.start_addr() as *const Header,
+            h.end_addr() as *const Header,
+            0,
+            h.end_addr() - h.start_addr(),
+            h.size,
+            h.is_allocated
+        );
+    }
+    for h in header.iter() {
+        println!("Header size={:#06x}:", h.size);
+        h.hexdump();
     }
 }
 
