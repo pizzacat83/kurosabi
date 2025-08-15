@@ -180,12 +180,6 @@ impl Header {
         header_for_allocated.set_size_including_header(size_excluding_header + HEADER_SIZE);
         header_for_allocated.next_header = self.next_header.take();
 
-        // Shrink self
-        // The following assertion should be guaranteed by can_provide()
-        assert!(self.start_addr() <= allocated_header_start);
-        // TODO: this should be refactored as "set_end_addr()"?
-        self.set_size_including_header(allocated_header_start - self.start_addr());
-
         if header_for_allocated.end_addr() != self.end_addr() {
             // Due to alignment, there is a free space after header_for_allocated until the end of self.
             // Before: self -> self_original_next
@@ -216,6 +210,12 @@ impl Header {
             // Before: self -> self_original_next
             // After: self -> allocated -> self_original_next
         }
+
+        // Shrink self
+        // The following assertion should be guaranteed by can_provide()
+        assert!(self.start_addr() <= allocated_header_start);
+        // TODO: this should be refactored as "set_end_addr()"?
+        self.set_size_including_header(allocated_header_start - self.start_addr());
 
         self.next_header = Some(header_for_allocated);
 
