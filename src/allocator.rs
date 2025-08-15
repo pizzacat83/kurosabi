@@ -117,32 +117,33 @@ impl Header {
 
     // util for testing
     // the chunk will be aligned for test reproducibility.
-    fn new_from_slice_aligned(slice: &mut [u8], align: usize) -> Result<Box<Self>> {
+    fn new_from_slice_aligned(slice: &mut [u8], align: usize, size: usize) -> Result<Box<Self>> {
         let unaligned_start = slice.as_mut_ptr() as usize;
-        let unaligned_end = unaligned_start + size_of_val(slice);
         let aligned_start = (unaligned_start + align) & !(align - 1);
-        let aligned_end = unaligned_end & !(align - 1);
+        let aligned_end = aligned_start + size;
 
-        let aligned_size = aligned_end
-            .checked_sub(aligned_start)
-            .ok_or("slice too small")?;
-
-        info!(
-            "shifted start from {:#x}:{:#x} to {:#x}:{:#x}",
-            unaligned_start, aligned_start, aligned_start, aligned_end
-        );
+        let start_offset = aligned_start - unaligned_start;
 
         // TODO: is this check enough for safety?
-        if aligned_size < HEADER_SIZE {
+        if size_of_val(slice) < start_offset + size {
             return Err("slice too small");
         }
+
+        if size < HEADER_SIZE {
+            return Err("chunk size too small");
+        }
+
+        info!(
+            "shifted from {:#x}:{:#x} to {:#x}:{:#x}",
+            unaligned_start, aligned_start, aligned_start, aligned_end
+        );
 
         let header = aligned_start as *mut Header;
 
         unsafe {
             header.write(Header {
                 next_header: None,
-                size: aligned_size,
+                size,
                 is_allocated: false,
                 _reserved: 0,
             });
@@ -151,10 +152,10 @@ impl Header {
     }
 
     fn provide(&mut self, size: usize, align: usize) -> Option<*mut u8> {
-        let size = max(round_up_to_nearest_pow2(size).ok()?, HEADER_SIZE);
+        let size_excluding_header = max(round_up_to_nearest_pow2(size).ok()?, HEADER_SIZE);
         let align = max(align, HEADER_SIZE);
 
-        if self.is_allocated || !self.can_provide(size, align) {
+        if self.is_allocated || !self.can_provide(size_excluding_header, align) {
             return None;
         }
 
@@ -169,28 +170,52 @@ impl Header {
         // self has enough space to allocate the requested object.
 
         let mut size_used = 0;
-        let allocated_addr = (self.end_addr() - size) & !(align - 1);
+
+        let allocated_addr = (self.end_addr() - size_excluding_header) & !(align - 1);
+
         let mut header_for_allocated = unsafe { Self::new_from_addr(allocated_addr - HEADER_SIZE) };
         header_for_allocated.is_allocated = true;
-        header_for_allocated.size = size + HEADER_SIZE;
-        size_used += header_for_allocated.size;
+        header_for_allocated.set_size_including_header(size_excluding_header + HEADER_SIZE);
         header_for_allocated.next_header = self.next_header.take();
+        size_used += header_for_allocated.size_including_header();
 
         if header_for_allocated.end_addr() != self.end_addr() {
-            // Make a header for padding
+            // Due to alignment, there is a free space after header_for_allocated until the end of self.
+            // Before: self -> self_original_next
+            // After: self -> allocated -> padding -> self_original_next
+
+            // TODO: no need to check if the size is too small?
+
             let mut header_for_padding =
                 unsafe { Self::new_from_addr(header_for_allocated.end_addr()) };
             header_for_padding.is_allocated = false;
             header_for_padding.size = self.end_addr() - header_for_allocated.end_addr();
+
             size_used += header_for_padding.size;
-            header_for_padding.next_header = header_for_allocated.next_header.take();
-            header_for_allocated.next_header = Some(header_for_padding);
+
+            {
+                // Before:
+                // header_for_allocated.next_header == self_original_next
+                // header_for_padding.next_header == None
+                // After:
+                // header_for_allocated.next_header == Some(header_for_padding)
+                // header_for_padding.next_header == self_original_next
+                header_for_padding.next_header = header_for_allocated.next_header.take();
+                header_for_allocated.next_header = Some(header_for_padding);
+            }
+        } else {
+            // The new chunk is allocated in the exact end of self!
+            // So the original self is chunked into self -> allocated
+
+            // Before: self -> self_original_next
+            // After: self -> allocated -> self_original_next
         }
 
         // Shrink self
         assert!(self.size >= size_used + HEADER_SIZE);
-        self.size -= size_used;
+        self.set_size_including_header(self.size_including_header() - size_used);
         self.next_header = Some(header_for_allocated);
+
         Some(allocated_addr as *mut u8)
     }
 
@@ -198,6 +223,19 @@ impl Header {
         // This check is rough - actual size needed may be smaller.
         // HEADER_SIZE * 2 => one for allocated region, another for padding.
         self.size >= size + HEADER_SIZE * 2 + align
+    }
+
+    fn size_including_header(&self) -> usize {
+        self.size
+    }
+
+    fn set_size_including_header(&mut self, size: usize) {
+        assert!(size >= HEADER_SIZE);
+        self.size = size
+    }
+
+    fn size_excluding_header(&self) -> usize {
+        self.size - HEADER_SIZE
     }
 
     fn start_addr(&self) -> usize {
@@ -221,8 +259,8 @@ fn test_provide() {
     let requested_align = 32;
 
     let mut buf = [0u8; 1 << 16]; // 131kb
-    let header =
-        Header::new_from_slice_aligned(&mut buf, 1 << 10).expect("failed to create header");
+    let header = Header::new_from_slice_aligned(&mut buf, 1 << 10, 1 << 10)
+        .expect("failed to create header");
 
     println!(
         "Test header: start={:?}, end={:?}",
@@ -234,9 +272,11 @@ fn test_provide() {
 
     for h in header.iter() {
         println!(
-            "{:?}:{:?} (size: {}) is_allocated={}",
+            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
             h.start_addr() as *const Header,
             h.end_addr() as *const Header,
+            0,
+            h.end_addr() - h.start_addr(),
             h.size,
             h.is_allocated
         );
@@ -253,9 +293,11 @@ fn test_provide() {
 
     for h in header.iter() {
         println!(
-            "{:?}:{:?} (size: {}) is_allocated={}",
+            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
             h.start_addr() as *const Header,
             h.end_addr() as *const Header,
+            0,
+            h.end_addr() - h.start_addr(),
             h.size,
             h.is_allocated
         );
