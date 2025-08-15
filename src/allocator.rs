@@ -245,7 +245,8 @@ impl Header {
     fn can_provide(&self, size_excluding_header: usize, align: usize) -> bool {
         // This check is rough - actual size needed may be smaller.
         // HEADER_SIZE * 2 => one for allocated region, another for padding.
-
+        // TODO: this is inappropriate in the case that an allocation requests the full area of this chunk.
+        // In this case, we don't need 2 headers, and we can just return the chunk itself.
         self.size >= size_excluding_header + HEADER_SIZE * 2 + align
     }
 
@@ -536,11 +537,29 @@ const _: () = assert!(HEADER_SIZE == 32);
 const _: () = assert!(HEADER_SIZE.count_ones() == 1);
 
 #[cfg(test)]
-mod test {
+mod tests {
     use core::{alloc::Layout, ptr::null};
 
     use super::*;
     use alloc::vec;
+
+    // Currently this test fails, because can_provide() is too conservative.
+    // #[test_case]
+    fn _malloc_max() {
+        const HEAP_SIZE: usize = 1 << 8;
+
+        let mut buf = [0u8; HEAP_SIZE << 1];
+        let mut header = Header::new_from_slice_aligned(&mut buf, HEAP_SIZE, HEAP_SIZE)
+            .expect("failed to create header");
+
+        // The start of the aligned area.
+        let heap_start = header.start_addr();
+
+        let requested_size = HEAP_SIZE - HEADER_SIZE;
+        let requested_align = 1;
+        let res = header.provide(requested_size, requested_align).unwrap();
+        dbg!(&res);
+    }
 
     /// Repeatedly alloc and free, and check if something bad happens
     #[test_case]
