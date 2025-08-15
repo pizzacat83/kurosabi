@@ -247,7 +247,8 @@ impl Header {
         // HEADER_SIZE * 2 => one for allocated region, another for padding.
         // TODO: this is inappropriate in the case that an allocation requests the full area of this chunk.
         // In this case, we don't need 2 headers, and we can just return the chunk itself.
-        self.size >= size_excluding_header + HEADER_SIZE * 2 + align
+
+        self.size_including_header() >= size_excluding_header + HEADER_SIZE * 2 + align
     }
 
     fn size_including_header(&self) -> usize {
@@ -542,6 +543,36 @@ mod tests {
 
     use super::*;
     use alloc::vec;
+
+    #[test_case]
+    fn malloc_does_not_use_allocated_area() {
+        const HEAP_SIZE: usize = 1 << 8;
+
+        let mut buf = [0u8; HEAP_SIZE << 1];
+        let mut header = Header::new_from_slice_aligned(&mut buf, HEAP_SIZE, HEAP_SIZE)
+            .expect("failed to create header");
+
+        // The start of the aligned area.
+        let heap_start = header.start_addr();
+
+        // Arrange: occupy most parts of the heap.
+        {
+            let requested_size = HEAP_SIZE >> 1;
+            let requested_align = 1;
+            header.provide(requested_size, requested_align).unwrap();
+        }
+        // Now most parts of the heap is already allocated.
+
+        // Try to allocate again.
+        let requested_size = HEAP_SIZE >> 2;
+        let requested_align = 1;
+        let res = header.provide(requested_size, requested_align);
+
+        // Allocation should fail, because there is not enough empty space.
+        assert!(res.is_none());
+
+        Box::leak(header);
+    }
 
     // Currently this test fails, because can_provide() is too conservative.
     // #[test_case]
