@@ -2,11 +2,13 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::mem::size_of_val;
+use core::slice;
 use core::{
     alloc::GlobalAlloc, borrow::BorrowMut, cell::RefCell, cmp::max, mem::size_of, ops::DerefMut,
     ptr::null_mut,
 };
 
+use crate::print::hexdump_bytes;
 use crate::result::Result;
 use crate::uefi::{EfiMemoryDescriptor, EfiMemoryType, MemoryMapHolder};
 use crate::{dbg, info, println};
@@ -251,6 +253,16 @@ impl Header {
             current: Some(self),
         }
     }
+
+    fn hexdump(&self) {
+        hexdump_bytes(unsafe {
+            // TODO: safety?
+            slice::from_raw_parts(
+                self as *const Header as *const u8,
+                self.size_including_header(),
+            )
+        });
+    }
 }
 
 #[test_case]
@@ -281,6 +293,10 @@ fn test_provide() {
             h.is_allocated
         );
     }
+    for h in header.iter() {
+        println!("Header size={:#06x}:", h.size);
+        h.hexdump();
+    }
     dbg!(&header);
 
     let mut header = header;
@@ -301,6 +317,10 @@ fn test_provide() {
             h.size,
             h.is_allocated
         );
+    }
+    for h in header.iter() {
+        println!("Header size={:#06x}:", h.size);
+        h.hexdump();
     }
 }
 
