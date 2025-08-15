@@ -534,3 +534,151 @@ const HEADER_SIZE: usize = size_of::<Header>();
 const _: () = assert!(HEADER_SIZE == 32);
 // Size of Header must be power of 2
 const _: () = assert!(HEADER_SIZE.count_ones() == 1);
+
+#[cfg(test)]
+mod test {
+    use core::{alloc::Layout, ptr::null};
+
+    use super::*;
+    use alloc::vec;
+
+    /// Repeatedly alloc and free, and check if something bad happens
+    #[test_case]
+    fn malloc_iterate_free_and_alloc() {
+        use alloc::vec::Vec;
+        let mut vec = Vec::new();
+        for i in 0..1000 {
+            vec.resize(i, 10);
+        }
+    }
+
+    /// Test if the allocated area is aligned as requested
+    #[test_case]
+    fn malloc_align() {
+        // TODO: why does this test store the pointers?
+        let mut pointers = [null_mut(); 1];
+        for align in [1, 2, 4, 8, 16, 32, 4096] {
+            for e in pointers.iter_mut() {
+                *e = ALLOCATOR.alloc_with_options(Layout::from_size_align(1234, align).unwrap());
+                assert_ne!(0, *e as usize);
+                assert_eq!(0, (*e as usize) % align);
+            }
+        }
+    }
+
+    /// Test if the allocated area is aligned as requested
+    /// (using an align randomly ordered)
+    #[test_case]
+    fn malloc_align_random_order() {
+        for align in [32, 4096, 8, 4, 16, 2, 1] {
+            let mut pointers = [null_mut(); 1];
+            for e in pointers.iter_mut() {
+                *e = ALLOCATOR.alloc_with_options(Layout::from_size_align(1234, align).unwrap());
+                assert_ne!(0, *e as usize);
+                assert_eq!(0, (*e as usize) % align);
+            }
+        }
+    }
+
+    #[test_case]
+    fn allocated_objects_have_no_overlap() {
+        let allocations = [
+            Layout::from_size_align(128, 128).unwrap(),
+            Layout::from_size_align(32, 32).unwrap(),
+            Layout::from_size_align(8, 8).unwrap(),
+            Layout::from_size_align(16, 16).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(4, 4).unwrap(),
+            Layout::from_size_align(2, 2).unwrap(),
+            Layout::from_size_align(600000, 64).unwrap(),
+            Layout::from_size_align(64, 64).unwrap(),
+            Layout::from_size_align(1, 1).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(3, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(600000, 64).unwrap(),
+            Layout::from_size_align(6000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+            Layout::from_size_align(60000, 64).unwrap(),
+        ];
+        let mut pointers = vec![null_mut(); allocations.len()];
+        for (i, (layout, pointer)) in allocations.iter().zip(pointers.iter_mut()).enumerate() {
+            *pointer = ALLOCATOR.alloc_with_options(*layout);
+            for k in 0..layout.size() {
+                // Mark the allocated area to be granted to this entry
+                unsafe { *pointer.add(k) = i as u8 }
+            }
+        }
+        for (i, (layout, pointer)) in allocations.iter().zip(pointers.iter()).enumerate() {
+            for k in 0..layout.size() {
+                // Check if nobody overwrote the "granted area"
+                assert_eq!(i as u8, unsafe { *pointer.add(k) });
+            }
+        }
+
+        // Deallocate entries of even index
+        for (i, (layout, pointer)) in allocations
+            .iter()
+            .zip(pointers.iter())
+            .enumerate()
+            .step_by(2)
+        {
+            unsafe {
+                ALLOCATOR.dealloc(*pointer, *layout);
+            }
+        }
+
+        // Check integrity of entries of odd index
+        for (i, (layout, pointer)) in allocations
+            .iter()
+            .zip(pointers.iter())
+            .enumerate()
+            .skip(1)
+            .step_by(2)
+        {
+            for k in 0..layout.size() {
+                // Check if nobody overwrote the "granted area"
+                assert_eq!(i as u8, unsafe { *pointer.add(k) });
+            }
+        }
+
+        // Reallocate entries of even index
+        for (i, (layout, pointer)) in allocations
+            .iter()
+            .zip(pointers.iter_mut())
+            .enumerate()
+            .step_by(2)
+        {
+            *pointer = ALLOCATOR.alloc_with_options(*layout);
+            for k in 0..layout.size() {
+                // Mark the allocated area to be granted to this entry
+                unsafe { *pointer.add(k) = i as u8 }
+            }
+        }
+
+        // Check integrity again
+        for (i, (layout, pointer)) in allocations.iter().zip(pointers.iter()).enumerate() {
+            for k in 0..layout.size() {
+                // Check if nobody overwrote the "granted area"
+                assert_eq!(i as u8, unsafe { *pointer.add(k) });
+            }
+        }
+    }
+}
