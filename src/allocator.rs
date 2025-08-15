@@ -244,8 +244,12 @@ impl Header {
         self as *const Header as usize
     }
 
+    fn payload_start_addr(&self) -> usize {
+        self as *const Header as usize + HEADER_SIZE
+    }
+
     fn end_addr(&self) -> usize {
-        self as *const Header as usize + self.size
+        self as *const Header as usize + self.size_including_header()
     }
 
     fn iter(&self) -> ChunkIterator {
@@ -266,10 +270,8 @@ impl Header {
 }
 
 #[test_case]
-fn test_provide() {
-    let requested_size = 32;
-    let requested_align = 32;
-
+/// Test the internal behavior of provide().
+fn test_provide_internal() {
     let mut buf = [0u8; 1 << 16]; // 131kb
     let header = Header::new_from_slice_aligned(&mut buf, 1 << 10, 1 << 10)
         .expect("failed to create header");
@@ -301,11 +303,21 @@ fn test_provide() {
 
     let mut header = header;
 
+    let original_header_start = header.start_addr();
+    let original_header_end = header.end_addr();
+    let original_size_including_header = header.size_including_header();
+
+    // 1. No padding
+
+    let requested_size = 32;
+    let requested_align = 32;
     let res = header.provide(requested_size, requested_align);
 
     dbg!(&header);
 
     dbg!(&res);
+
+    let allocated_addr = res.unwrap();
 
     for h in header.iter() {
         println!(
@@ -321,6 +333,37 @@ fn test_provide() {
     for h in header.iter() {
         println!("Header size={:#06x}:", h.size);
         h.hexdump();
+    }
+
+    {
+        let mut it = header.iter();
+
+        let remaining = it.next().unwrap();
+        let allocated = it.next().unwrap();
+        assert!(it.next().is_none());
+
+        // The original header is separated into (remaining, allocated).
+
+        assert!(allocated.is_allocated);
+        assert!(!remaining.is_allocated);
+
+        assert_eq!(allocated_addr as usize, allocated.payload_start_addr());
+        assert_eq!(original_header_end, allocated.end_addr());
+        assert_eq!(original_header_start, remaining.start_addr());
+        assert_eq!(remaining.end_addr(), allocated.start_addr());
+
+        // The header for the allocated chunk has the request size
+        assert_eq!(requested_size, allocated.size_excluding_header());
+        assert_eq!(
+            requested_size + HEADER_SIZE,
+            allocated.size_including_header()
+        );
+
+        // The header for the remaining chunk has the remaining size
+        assert_eq!(
+            original_size_including_header,
+            allocated.size_including_header() + remaining.size_including_header()
+        );
     }
 }
 

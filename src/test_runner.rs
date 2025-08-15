@@ -19,7 +19,18 @@ pub fn test_runner(tests: &[&dyn Testable]) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let mut sw = SerialPort::new_for_com1();
-    writeln!(sw, "PANIC during test: {info:?}").unwrap();
+    write!(sw, "PANIC during test: ").unwrap();
+    if let Some(location) = info.location() {
+        write!(
+            sw,
+            "{}:{}:{} ",
+            location.file(),
+            location.line(),
+            location.column()
+        )
+        .unwrap();
+    }
+    writeln!(sw, "{info:?}").unwrap();
     exit_qemu(QemuExitCode::Fail);
 }
 
