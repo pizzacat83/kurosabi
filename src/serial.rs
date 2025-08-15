@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::x64::{busy_loop_hint, read_io_port_u8, write_io_port_u8};
+use crate::x86::{busy_loop_hint, read_io_port_u8, write_io_port_u8};
 
 pub struct SerialPort {
     base: u16,

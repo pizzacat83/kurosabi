@@ -14,7 +14,7 @@ pub mod qemu;
 pub mod result;
 pub mod serial;
 pub mod uefi;
-pub mod x64;
+pub mod x86;
 
 #[cfg(not(test))]
 pub mod panic;

@@ -9,7 +9,7 @@ use wasabi::uefi::{
     exit_from_efi_boot_services, init_vram, EfiHandle, EfiMemoryType, EfiSystemTable,
     MemoryMapHolder,
 };
-use wasabi::x64::hlt;
+use wasabi::x86::hlt;
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
