@@ -102,6 +102,8 @@ pub fn exit_from_efi_boot_services(
     memory_map: &mut MemoryMapHolder,
 ) -> Result<()> {
     loop {
+        efi_system_table.boot_services.get_memory_map(memory_map)?;
+
         let result = efi_system_table
             .boot_services
             .exit_boot_services(image_handle, memory_map.map_key);
@@ -113,7 +115,6 @@ pub fn exit_from_efi_boot_services(
                 // Ideally we should check if the error is EFI_INVALID_PARAMETER,
                 // but I'm too lazy to do this.
                 info!("Retrying exit_boot_services after refreshing memory map; error: {error}");
-                efi_system_table.boot_services.get_memory_map(memory_map)?;
             }
         }
     }
