@@ -288,8 +288,6 @@ fn test_provide_internal() {
         header.end_addr() as *const Header
     );
 
-    dbg!(&header);
-
     for h in header.iter() {
         println!(
             "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
@@ -305,7 +303,6 @@ fn test_provide_internal() {
         println!("Header size={:#06x}:", h.size);
         h.hexdump();
     }
-    dbg!(&header);
 
     let mut header = header;
 
@@ -319,27 +316,23 @@ fn test_provide_internal() {
     let requested_align = 32;
     let res = header.provide(requested_size, requested_align);
 
-    dbg!(&header);
-
-    dbg!(&res);
-
     let allocated1_addr = res.unwrap();
 
-    for h in header.iter() {
-        println!(
-            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
-            h.start_addr() as *const Header,
-            h.end_addr() as *const Header,
-            h.start_addr() - heap_start,
-            h.end_addr() - heap_start,
-            h.size,
-            h.is_allocated
-        );
-    }
-    for h in header.iter() {
-        println!("Header size={:#06x}:", h.size);
-        h.hexdump();
-    }
+    // for h in header.iter() {
+    //     println!(
+    //         "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
+    //         h.start_addr() as *const Header,
+    //         h.end_addr() as *const Header,
+    //         h.start_addr() - heap_start,
+    //         h.end_addr() - heap_start,
+    //         h.size,
+    //         h.is_allocated
+    //     );
+    // }
+    // for h in header.iter() {
+    //     println!("Header size={:#06x}:", h.size);
+    //     h.hexdump();
+    // }
 
     {
         let mut it = header.iter();
@@ -383,27 +376,23 @@ fn test_provide_internal() {
 
     let res = header.provide(requested_size, requested_align);
 
-    dbg!(&header);
-
-    dbg!(&res);
-
     let allocated2_addr = res.unwrap();
 
-    for h in header.iter() {
-        println!(
-            "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
-            h.start_addr() as *const Header,
-            h.end_addr() as *const Header,
-            h.start_addr() - heap_start,
-            h.end_addr() - heap_start,
-            h.size,
-            h.is_allocated
-        );
-    }
-    for h in header.iter() {
-        println!("Header size={:#06x}:", h.size);
-        h.hexdump();
-    }
+    // for h in header.iter() {
+    //     println!(
+    //         "{:?}:{:?} ({:#06x}:{:#06x}) (size: {:#06x}) is_allocated={}",
+    //         h.start_addr() as *const Header,
+    //         h.end_addr() as *const Header,
+    //         h.start_addr() - heap_start,
+    //         h.end_addr() - heap_start,
+    //         h.size,
+    //         h.is_allocated
+    //     );
+    // }
+    // for h in header.iter() {
+    //     println!("Header size={:#06x}:", h.size);
+    //     h.hexdump();
+    // }
 
     {
         let mut it = header.iter();
