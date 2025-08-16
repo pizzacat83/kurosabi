@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::{
-    arch::asm,
+    arch::{asm, global_asm},
     fmt,
     marker::PhantomData,
     mem::{offset_of, size_of, size_of_val},
@@ -10,7 +10,7 @@ use core::{
     pin::Pin,
 };
 
-use crate::info;
+use crate::{error, info};
 
 pub fn write_io_port_u8(port: u16, data: u8) {
     unsafe {
@@ -62,6 +62,7 @@ pub unsafe fn write_es(selector: u16) {
 pub unsafe fn write_cs(selector: u16) {
     // The MOV instruction CANNOT be used to load the CS register.
     // Use far-jump(ljmp) instead.
+    // TODO: what's this hack?
     asm!(
 	"lea rax, [rip + 2f]", // Target address (label 1 below)
 	"push cx", // Construct a far pointer on the stack
@@ -235,6 +236,15 @@ impl Idt {
             int_handler_unimplemented,
         ); 0x100];
 
+        entries[3] = IdtDescriptor::new(
+            segment_selector,
+            1,
+            // Set DPL=3 to allow user land to make this interrupt (e.g. via
+            // int3 op)
+            IdtAttr::IntGateDPL3,
+            interrupt_entrypoint3,
+        );
+
         // TODO: customize handlers
 
         let limit = size_of_val(&entries) as u16;
@@ -301,6 +311,259 @@ impl IdtDescriptor {
 extern "sysv64" fn int_handler_unimplemented() {
     panic!("unexpected interrupt!");
 }
+
+/// The common interrupt handler.
+///
+/// When an interrupt happens, following happens:
+/// 1. interrupt_entrypointN, the handler registered in IDT, is called
+///    This will set rcx=#INT and jump to inthandler_common
+/// 2. inthandler_common is called by interrupt_entrypointN
+///    This stashes registers to stack, calls the Rust fn inthandler,
+///    restores the registers, and returns from interrupt handling.
+///    
+#[no_mangle]
+extern "sysv64" fn inthandler(info: &InterruptInfo, interrupt_number: usize) {
+    error!("Interrupt Info: {:?}", info);
+    error!("Exception {interrupt_number:#04x}: ");
+    match interrupt_number {
+        3 => {
+            error!("Breakpoint");
+        }
+        _ => {
+            error!("Not handled");
+        }
+    }
+    panic!("fatal exception");
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InterruptInfo {
+    /// Should be aligned on 16-byte boundaries to pass the
+    /// alignment checks done by FXSAVE / FXRSTOR
+    fpu_context: FPUContext,
+
+    _dummy: u64,
+
+    greg: GeneralRegisterContext,
+    error_code: u64,
+
+    /// CPU stashes this info
+    ctx: InterruptContext,
+}
+
+const _: () = assert!(size_of::<InterruptInfo>() == (16 + 4 + 1) * 8 + 8 + 512);
+
+impl fmt::Debug for InterruptInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "
+        {{
+            rip: {:#018x}, CS: {:#06x},
+            rsp: {:#018x}, SS: {:#06x},
+            rbp: {:#018x},
+
+            rflags:     {:#018x},
+            error_code: {:#018x},
+
+            rax: {:#018x}, rcx: {:#018x},
+            rdx: {:#018x}, rbx: {:#018x},
+            rsi: {:#018x}, rdi: {:#018x},
+            r8:  {:#018x}, r9:  {:#018x},
+            r10: {:#018x}, r11: {:#018x},
+            r12: {:#018x}, r13: {:#018x},
+            r14: {:#018x}, r15: {:#018x},
+        }}",
+            self.ctx.rip,
+            self.ctx.cs,
+            self.ctx.rsp,
+            self.ctx.ss,
+            self.greg.rbp,
+            self.ctx.rflags,
+            self.error_code,
+            self.greg.rax,
+            self.greg.rcx,
+            self.greg.rdx,
+            self.greg.rbx,
+            self.greg.rsi,
+            self.greg.rdi,
+            self.greg.r8,
+            self.greg.r9,
+            self.greg.r10,
+            self.greg.r11,
+            self.greg.r12,
+            self.greg.r13,
+            self.greg.r14,
+            self.greg.r15,
+        )
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FPUContext {
+    data: [u8; 512],
+}
+
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GeneralRegisterContext {
+    rax: u64,
+    rdx: u64,
+    rbx: u64,
+    rbp: u64,
+    rsi: u64,
+    rdi: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+    r12: u64,
+    r13: u64,
+    r14: u64,
+    r15: u64,
+    rcx: u64,
+}
+const _: () = assert!(size_of::<GeneralRegisterContext>() == (16 - 1) * 8);
+
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct InterruptContext {
+    rip: u64,
+    cs: u64,
+    rflags: u64,
+    rsp: u64,
+    ss: u64,
+}
+const _: () = assert!(size_of::<InterruptContext>() == 8 * 5);
+
+/// This generates interrupt_entrypointN()
+/// Generated asm will be looks like this:
+/// ```
+/// .global interrupt_entrypointN
+///    interrupt_entrypointN:
+///    push 0 // No error code
+///    push rcx // Save rcx first to reuse
+///    mov rcx, N // INT#
+///    jmp inthandler_common
+/// ```
+macro_rules! interrupt_entrypoint {
+    ($index:literal) => {
+        global_asm!(concat!(
+            ".global interrupt_entrypoint",
+            stringify!($index),
+            "\n",
+            "interrupt_entrypoint",
+            stringify!($index),
+            ":\n",
+            "push 0 // No error code\n",
+            "push rcx // Save rcx first to reuse\n",
+            "mov rcx, ",
+            stringify!($index),
+            "\n",
+            "jmp inthandler_common"
+        ));
+    };
+}
+macro_rules! interrupt_entrypoint_with_ecode {
+    ($index:literal) => {
+        global_asm!(concat!(
+            ".global interrupt_entrypoint",
+            stringify!($index),
+            "\n",
+            "interrupt_entrypoint",
+            stringify!($index),
+            ":\n",
+            "push rcx // Save rcx first to reuse\n",
+            "mov rcx, ",
+            stringify!($index),
+            "\n",
+            "jmp inthandler_common"
+        ));
+    };
+}
+
+interrupt_entrypoint!(3);
+interrupt_entrypoint!(6);
+interrupt_entrypoint_with_ecode!(8);
+interrupt_entrypoint_with_ecode!(13);
+interrupt_entrypoint_with_ecode!(14);
+interrupt_entrypoint!(32);
+
+extern "sysv64" {
+    fn interrupt_entrypoint3();
+    fn interrupt_entrypoint6();
+    fn interrupt_entrypoint8();
+    fn interrupt_entrypoint13();
+    fn interrupt_entrypoint14();
+    fn interrupt_entrypoint32();
+}
+
+// inthandler_common
+// Stash registers, call inthandler, restore registers, iretq
+global_asm!(
+    r#"
+.global inthandler_common
+inthandler_common:
+    // Stash general purpose registers (except rsp and rcx)
+    // In reverse order of GeneralRegisterContext
+    push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rdi
+    push rsi
+    push rbp
+    push rbx
+    push rdx
+    push rax
+    // Stash FPU State
+    sub rsp, 512 + 8
+    fxsave64[rsp]
+
+    // Prepare to call inithandler
+    // 1st parameter: info: &InterruptInfo (pointer to the saved CPU state)
+    mov rdi, rsp
+    // Align the stack to 16-bytes boundary
+    mov rbp, rsp
+    and rsp, -16
+    // 2nd parameter: interrupt_number: usize
+    mov rsi, rcx
+
+    call inthandler
+
+    mov rsp, rbp
+    //
+    fxrstor64[rsp]
+    add rsp, 512 + 8
+    //
+    pop rax
+    pop rdx
+    pop rbx
+    pop rbp
+    pop rsi
+    pop rdi
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    //
+    pop rcx
+    add rsp, 8 // for Error Code
+    iretq
+"#
+);
 
 // PDDRTTTT (TTTT: type, R: reserved, D: DPL, P: present)
 // DPL: Descriptor Privilege Level
@@ -407,6 +670,8 @@ impl GdtSegmentDescriptor {
 // 39-32: Base[23:16]
 // 31-16: Base[15:00]
 // 15-00: Limit[15:00]
+//
+// Note: Base and Limit is ignored in 64-bit mode.
 // <https://wiki.osdev.org/Global_Descriptor_Table#Segment_Descriptor>
 
 // Access Byte: PDDSECRA
