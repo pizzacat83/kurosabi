@@ -237,10 +237,12 @@ impl Idt {
 
         // TODO: customize handlers
 
+        let limit = size_of_val(&entries) as u16;
+
         let entries = Box::pin(entries);
 
         let params = IdtrParameters {
-            limit: size_of_val(&entries) as u16,
+            limit,
             base: entries.as_ptr(),
         };
         unsafe {
