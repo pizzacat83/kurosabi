@@ -1,4 +1,14 @@
-use core::{arch::asm, fmt, marker::PhantomData};
+extern crate alloc;
+
+use alloc::boxed::Box;
+use core::{
+    arch::asm,
+    fmt,
+    marker::PhantomData,
+    mem::{offset_of, size_of, size_of_val},
+    panic,
+    pin::Pin,
+};
 
 pub fn write_io_port_u8(port: u16, data: u8) {
     unsafe {
@@ -33,6 +43,10 @@ pub fn read_cr3() -> *mut PML4 {
     unsafe { asm!("mov rax, cr3", out("rax") cr3) }
 
     cr3
+}
+
+pub fn trigger_debug_interrupt() {
+    unsafe { asm!("int3") }
 }
 
 // <https://cdrdv2-public.intel.com/825758/253668-sdm-vol-3a.pdf>
@@ -123,6 +137,115 @@ const ATTR_WRITABLE: usize = 1 << 1;
 const ATTR_USER: usize = 1 << 2;
 const ATTR_WRITE_THROUGH: usize = 1 << 3;
 const ATTR_CACHE_DISABLE: usize = 1 << 4;
+
+pub fn init_exceptions() -> (GdtWrapper, Idt) {
+    // TODO: init GDT
+
+    let idt = Idt::new(KERNEL_CS);
+    ((), idt)
+}
+
+/// Interrupt Descriptor Table
+pub struct Idt {
+    entries: Pin<Box<[IdtDescriptor; 0x100]>>,
+}
+impl Idt {
+    fn new(segment_selector: u16) -> Self {
+        let mut entries = [IdtDescriptor::new(
+            segment_selector,
+            1,
+            IdtAttr::IntGateDPL0,
+            int_handler_unimplemented,
+        ); 0x100];
+
+        // TODO: customize handlers
+
+        let entries = Box::pin(entries);
+
+        let params = IdtrParameters {
+            limit: size_of_val(&entries) as u16,
+            base: entries.as_ptr(),
+        };
+        unsafe {
+            asm!("lidt [rcx]", in("rcx") &params);
+        }
+
+        Self { entries }
+    }
+}
+
+/// The parameter of LIDT and LGDT instruction.
+#[repr(C, packed)]
+#[derive(Debug)]
+struct IdtrParameters {
+    limit: u16,
+    base: *const IdtDescriptor,
+}
+const _: () = assert!(size_of::<IdtrParameters>() == 10);
+const _: () = assert!(offset_of!(IdtrParameters, base) == 2);
+
+/// (offset_low, offset_mid, offset_high) is the address of the interruption handler.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct IdtDescriptor {
+    offset_low: u16,
+    segment_selector: u16,
+    ist_index: u8,
+    attr: IdtAttr,
+    offset_mid: u16,
+    offset_high: u32,
+    _reserved: u32,
+}
+impl IdtDescriptor {
+    fn new(
+        segment_selector: u16,
+        ist_index: u8,
+        attr: IdtAttr,
+        handler: unsafe extern "sysv64" fn(),
+    ) -> Self {
+        let handler_addr = handler as *const unsafe extern "sysv64" fn() as usize;
+
+        Self {
+            offset_low: handler_addr as u16,
+            segment_selector,
+            ist_index,
+            attr,
+            offset_mid: (handler_addr >> 16) as u16,
+            offset_high: (handler_addr >> 32) as u32,
+            _reserved: 0,
+        }
+    }
+}
+
+// TODO: no_mangle needed?
+#[no_mangle]
+extern "sysv64" fn int_handler_unimplemented() {
+    panic!("unexpected interrupt!");
+}
+
+// PDDRTTTT (TTTT: type, R: reserved, D: DPL, P: present)
+// DPL: Descriptor Privilege Level
+// TODO: understand DPL
+#[repr(u8)]
+#[derive(Copy, Clone)]
+enum IdtAttr {
+    // Without _NotPresent value, MaybeUninit::zeroed() on this struct will be undefined behavior.
+    _NotPresent = 0,
+
+    IntGateDPL0 = BIT_FLAGS_INTGATE | BIT_FLAGS_PRESENT | BIT_FLAGS_DPL0,
+    IntGateDPL3 = BIT_FLAGS_INTGATE | BIT_FLAGS_PRESENT | BIT_FLAGS_DPL3,
+}
+
+pub const BIT_FLAGS_INTGATE: u8 = 0b0000_1110u8;
+pub const BIT_FLAGS_PRESENT: u8 = 0b1000_0000u8;
+pub const BIT_FLAGS_DPL0: u8 = 0 << 5; // system
+pub const BIT_FLAGS_DPL3: u8 = 3 << 5; // user
+
+// TODO
+type GdtWrapper = ();
+
+// TODO: what's this?
+const KERNEL_CS: u16 = 1 << 3;
 
 #[cfg(test)]
 mod tests {
