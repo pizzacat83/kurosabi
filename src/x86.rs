@@ -260,17 +260,6 @@ pub type PD = Table<2, 21, PT>;
 pub type PDPT = Table<3, 30, PD>;
 pub type PML4 = Table<4, 39, PDPT>;
 
-fn print_table_indices(addr: u64) {
-    let pml4index = (addr >> 39) & 0x1ff;
-    let pdptindex = (addr >> 30) & 0x1ff;
-    let pdindex = (addr >> 21) & 0x1ff;
-    let ptindex = (addr >> 12) & 0x1ff;
-    print!(
-        "[{:#05x}, {:#05x}, {:#05x}, {:#05x}]",
-        pml4index, pdptindex, pdindex, ptindex
-    );
-}
-
 impl PML4 {
     pub fn new() -> Box<Self> {
         let this = unsafe { MaybeUninit::zeroed().assume_init() };
@@ -285,12 +274,8 @@ impl PML4 {
         phys_start: u64,
         attr: PageAttr,
     ) -> Result<()> {
-        print!("Indices for {:#018x}: ", 0);
-        print_table_indices(0);
-        println!("");
-        print!("Indices for {:#018x}: ", 0x000000010cc66000u64);
-        print_table_indices(0x000000010cc66000u64);
-        println!("");
+        self.print_entry(0);
+        self.print_entry(0x000000010cc66000u64);
 
         if virt_start & (ATTR_MASK as u64) != 0 {
             return Err("virt_start is not aligned");
@@ -323,6 +308,9 @@ impl PML4 {
             page_table_entry.set_page((virt_addr - virt_start + phys_start) as usize, attr)?;
         }
 
+        self.print_entry(0);
+        self.print_entry(0x000000010cc66000u64);
+
         Ok(())
     }
 
@@ -340,19 +328,9 @@ impl PML4 {
         }
 
         for virt_addr in (virt_start..virt_end).step_by(PAGE_SIZE) {
-            let pdpt: &Table<3, 30, Table<2, 21, Table<1, 12, [u8; 4096]>>> = self
-                .entry(virt_addr as usize)
-                .table()
-                .expect("table failed although already populated");
-            let pd = pdpt
-                .entry(virt_addr as usize)
-                .table()
-                .expect("table failed although already populated");
-            let pt = pd
-                .entry(virt_addr as usize)
-                .table()
-                .expect("table failed although already populated");
-            let page_table_entry = pt.entry(virt_addr as usize);
+            let page_table_entry = self
+                .get_page_table_entry(virt_addr)
+                .unwrap_or_else(|error| panic!("entry of {virt_addr:#018x} not found: {error}"));
 
             let expected = virt_addr as usize | attr as usize;
             let actual = page_table_entry.value;
@@ -365,6 +343,44 @@ impl PML4 {
         }
 
         Ok(())
+    }
+
+    fn get_page_table_entry(&self, virt_addr: u64) -> Result<&PTEntry> {
+        let pdpt: &Table<3, 30, Table<2, 21, Table<1, 12, [u8; 4096]>>> = self
+            .entry(virt_addr as usize)
+            .table()
+            .ok_or("Not found in PDPT")?;
+        let pd = pdpt
+            .entry(virt_addr as usize)
+            .table()
+            .ok_or("not found in PD")?;
+        let pt = pd
+            .entry(virt_addr as usize)
+            .table()
+            .ok_or("Not found in PT")?;
+        let page_table_entry = pt.entry(virt_addr as usize);
+        Ok(page_table_entry)
+    }
+
+    fn print_entry(&self, virt_addr: u64) {
+        let pml4index = (virt_addr >> 39) & 0x1ff;
+        let pdptindex = (virt_addr >> 30) & 0x1ff;
+        let pdindex = (virt_addr >> 21) & 0x1ff;
+        let ptindex = (virt_addr >> 12) & 0x1ff;
+        let ptentry = self.get_page_table_entry(virt_addr);
+
+        print!(
+            "[{:#05x}, {:#05x}, {:#05x}, {:#05x}] -> ",
+            pml4index, pdptindex, pdindex, ptindex
+        );
+        match ptentry {
+            Ok(entry) => {
+                println!("Ok({:#018x})", entry.value);
+            }
+            Err(error) => {
+                println!("Err(\"{error}\")");
+            }
+        }
     }
 }
 
