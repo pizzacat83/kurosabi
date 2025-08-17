@@ -51,6 +51,11 @@ pub fn init_paging(memory_map: &MemoryMapHolder) {
         .create_mapping(0, end_of_mem, 0, PageAttr::ReadWriteKernel)
         .expect("Failed to create initial page mapping");
 
+    // TODO: move this to a unit test?
+    // table
+    //     .identity_mapping_sanity_check(0, end_of_mem, PageAttr::ReadWriteKernel)
+    //     .expect("sanity check failed");
+
     table
         .identity_mapping_sanity_check(0, end_of_mem, PageAttr::ReadWriteKernel)
         .expect("sanity check failed");

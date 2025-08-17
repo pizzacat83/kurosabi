@@ -274,9 +274,6 @@ impl PML4 {
         phys_start: u64,
         attr: PageAttr,
     ) -> Result<()> {
-        self.print_entry(0);
-        self.print_entry(0x000000010cc66000u64);
-
         if virt_start & (ATTR_MASK as u64) != 0 {
             return Err("virt_start is not aligned");
         }
@@ -307,9 +304,6 @@ impl PML4 {
 
             page_table_entry.set_page((virt_addr - virt_start + phys_start) as usize, attr)?;
         }
-
-        self.print_entry(0);
-        self.print_entry(0x000000010cc66000u64);
 
         Ok(())
     }
