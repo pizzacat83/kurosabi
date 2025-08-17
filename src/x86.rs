@@ -10,7 +10,7 @@ use core::{
     pin::Pin,
 };
 
-use crate::{error, info, result::Result};
+use crate::{error, info, print, println, result::Result};
 
 pub fn write_io_port_u8(port: u16, data: u8) {
     unsafe {
@@ -51,6 +51,7 @@ pub fn read_cr3() -> *mut PML4 {
 /// Writing to CR3 can causes any exceptions so it is programmer's responsibility to setup correct page tables.
 #[no_mangle]
 pub unsafe fn write_cr3(table: *const PML4) {
+    info!("write_cr3: {:#018x}", table as usize);
     asm!("mov cr3, rax", in("rax") table)
 }
 
@@ -142,6 +143,12 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> Table<LEVEL, SHIFT, NEXT> {
     fn entry_mut(&mut self, addr: usize) -> &mut Entry<LEVEL, SHIFT, NEXT> {
         let index = (addr >> SHIFT) & 0x199;
         &mut self.entries[index]
+    }
+
+    /// It is caller's responsibility to ensure addr relates to this entry.
+    fn entry(&self, addr: usize) -> &Entry<LEVEL, SHIFT, NEXT> {
+        let index = (addr >> SHIFT) & 0x1ff;
+        &self.entries[index]
     }
 }
 
@@ -253,6 +260,17 @@ pub type PD = Table<2, 21, PT>;
 pub type PDPT = Table<3, 30, PD>;
 pub type PML4 = Table<4, 39, PDPT>;
 
+fn print_table_indices(addr: u64) {
+    let pml4index = (addr >> 39) & 0x1ff;
+    let pdptindex = (addr >> 30) & 0x1ff;
+    let pdindex = (addr >> 21) & 0x1ff;
+    let ptindex = (addr >> 12) & 0x1ff;
+    print!(
+        "[{:#05x}, {:#05x}, {:#05x}, {:#05x}]",
+        pml4index, pdptindex, pdindex, ptindex
+    );
+}
+
 impl PML4 {
     pub fn new() -> Box<Self> {
         let this = unsafe { MaybeUninit::zeroed().assume_init() };
@@ -267,7 +285,22 @@ impl PML4 {
         phys_start: u64,
         attr: PageAttr,
     ) -> Result<()> {
-        // TODO: check addresses
+        print!("Indices for {:#018x}: ", 0);
+        print_table_indices(0);
+        println!("");
+        print!("Indices for {:#018x}: ", 0x000000010cc66000u64);
+        print_table_indices(0x000000010cc66000u64);
+        println!("");
+
+        if virt_start & (ATTR_MASK as u64) != 0 {
+            return Err("virt_start is not aligned");
+        }
+        if virt_end & (ATTR_MASK as u64) != 0 {
+            return Err("virt_end is not aligned");
+        }
+        if phys_start & (ATTR_MASK as u64) != 0 {
+            return Err("phys_start is not aligned");
+        }
 
         for virt_addr in (virt_start..virt_end).step_by(PAGE_SIZE) {
             let pdpt = self
@@ -288,6 +321,47 @@ impl PML4 {
             let page_table_entry = pt.entry_mut(virt_addr as usize);
 
             page_table_entry.set_page((virt_addr - virt_start + phys_start) as usize, attr)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn identity_mapping_sanity_check(
+        &self,
+        virt_start: u64,
+        virt_end: u64,
+        attr: PageAttr,
+    ) -> Result<()> {
+        if virt_start & (ATTR_MASK as u64) != 0 {
+            return Err("virt_start is not aligned");
+        }
+        if virt_end & (ATTR_MASK as u64) != 0 {
+            return Err("virt_end is not aligned");
+        }
+
+        for virt_addr in (virt_start..virt_end).step_by(PAGE_SIZE) {
+            let pdpt: &Table<3, 30, Table<2, 21, Table<1, 12, [u8; 4096]>>> = self
+                .entry(virt_addr as usize)
+                .table()
+                .expect("table failed although already populated");
+            let pd = pdpt
+                .entry(virt_addr as usize)
+                .table()
+                .expect("table failed although already populated");
+            let pt = pd
+                .entry(virt_addr as usize)
+                .table()
+                .expect("table failed although already populated");
+            let page_table_entry = pt.entry(virt_addr as usize);
+
+            let expected = virt_addr as usize | attr as usize;
+            let actual = page_table_entry.value;
+
+            assert_eq!(
+                expected, actual,
+                "unexpected value for page {:#018x}! Expected: {:#018x}, Actual: {:#018x}",
+                virt_addr, expected, actual
+            );
         }
 
         Ok(())

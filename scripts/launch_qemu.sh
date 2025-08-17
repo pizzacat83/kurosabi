@@ -26,6 +26,8 @@ qemu-system-x86_64 \
     -chardev stdio,id=char_com1,mux=on,logfile=log/com1.txt \
     -serial chardev:char_com1 \
     -device isa-debug-exit,iobase=0xf4,iosize=0x01 \
+    -d int,cpu_reset -D log/qemu_debug.log \
+    --no-reboot \
     $QEMU_OPTIONS
 
 RETCODE=$?
