@@ -328,6 +328,7 @@ extern "sysv64" fn inthandler(info: &InterruptInfo, interrupt_number: usize) {
     match interrupt_number {
         3 => {
             error!("Breakpoint");
+            return;
         }
         _ => {
             error!("Not handled");
