@@ -141,7 +141,7 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> Table<LEVEL, SHIFT, NEXT> {
 
     /// It is caller's responsibility to ensure addr relates to this entry.
     fn entry_mut(&mut self, addr: usize) -> &mut Entry<LEVEL, SHIFT, NEXT> {
-        let index = (addr >> SHIFT) & 0x199;
+        let index = (addr >> SHIFT) & 0x1ff;
         &mut self.entries[index]
     }
 
