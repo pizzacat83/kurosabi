@@ -21,6 +21,11 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     fill_rect(&mut vram, 0x000000, 0, 0, vw, vh).expect("fill rect failed");
 
+    let loaded_image = handle_loaded_image_protocol(image_handle, efi_system_table)
+        .expect("failed to handle loaded image protocol");
+    println!("image_base: {:#018x}", loaded_image.image_base);
+    println!("image_size: {:#018x}", loaded_image.image_size);
+
     let _memory_map = init_basic_runtime(image_handle, efi_system_table);
 
     // let mut total_memory_pages = 0;
@@ -36,11 +41,6 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // println!("Total: {total_memory_pages} pages = {total_memory_size_mib} MiB");
 
     println!("Hello from the world without boot service!");
-
-    let loaded_image = handle_loaded_image_protocol(image_handle, efi_system_table)
-        .expect("failed to handle loaded image protocol");
-    println!("image_base: {:#018x}", loaded_image.image_base);
-    println!("image_size: {:#018x}", loaded_image.image_size);
 
     // let cr3 = wasabi::x86::read_cr3();
     // println!("{cr3:#p}");
