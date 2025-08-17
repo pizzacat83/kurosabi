@@ -56,8 +56,10 @@ pub fn init_paging(memory_map: &MemoryMapHolder) {
     //     .identity_mapping_sanity_check(0, end_of_mem, PageAttr::ReadWriteKernel)
     //     .expect("sanity check failed");
 
+    // Make access to 0x0 cause a page fault!
     table
-        .identity_mapping_sanity_check(0, end_of_mem, PageAttr::ReadWriteKernel)
-        .expect("sanity check failed");
+        .create_mapping(0, 4096, 0, PageAttr::NotPresent)
+        .expect("Failed to create initial page mapping");
+
     unsafe { write_cr3(Box::into_raw(table)) }
 }

@@ -47,6 +47,15 @@ pub fn read_cr3() -> *mut PML4 {
     cr3
 }
 
+/// The virtual address that triggered the page fault.
+/// <https://wiki.osdev.org/CPU_Registers_x86-64#CR2>
+pub fn read_cr2() -> u64 {
+    let mut cr2: u64;
+    unsafe { asm!("mov rax, cr2", out("rax") cr2) }
+
+    cr2
+}
+
 /// # Safety
 /// Writing to CR3 can causes any exceptions so it is programmer's responsibility to setup correct page tables.
 #[no_mangle]
@@ -413,6 +422,9 @@ pub fn init_exceptions() -> (GdtWrapper, Idt) {
 }
 
 /// Interrupt Descriptor Table
+///
+/// <https://wiki.osdev.org/Interrupt_Vector_Table#CPU_Interrupt_Layout>
+/// <https://wiki.osdev.org/Exceptions>
 pub struct Idt {
     entries: Pin<Box<[IdtDescriptor; 0x100]>>,
 }
@@ -432,6 +444,13 @@ impl Idt {
             // int3 op)
             IdtAttr::IntGateDPL3,
             interrupt_entrypoint3,
+        );
+
+        entries[0x0e] = IdtDescriptor::new(
+            segment_selector,
+            1,
+            IdtAttr::IntGateDPL0,
+            interrupt_entrypoint14,
         );
 
         // TODO: customize handlers
@@ -515,9 +534,18 @@ extern "sysv64" fn inthandler(info: &InterruptInfo, interrupt_number: usize) {
     error!("Interrupt Info: {:?}", info);
     error!("Exception {interrupt_number:#04x}: ");
     match interrupt_number {
+        // <https://wiki.osdev.org/Exceptions>
         3 => {
             error!("Breakpoint");
             return;
+        }
+        0x0e => {
+            error!("Page fault");
+            error!("When accessing {:#018x}", read_cr2());
+            error!(
+                "Error code: {:?}",
+                PageFaultErrorCode(info.error_code as u32)
+            );
         }
         _ => {
             error!("Not handled");
@@ -525,6 +553,88 @@ extern "sysv64" fn inthandler(info: &InterruptInfo, interrupt_number: usize) {
     }
     panic!("fatal exception");
 }
+
+/// <https://wiki.osdev.org/Exceptions#Error_code>
+#[repr(transparent)]
+struct PageFaultErrorCode(u32);
+
+impl PageFaultErrorCode {
+    fn is_present(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_PRESENT) != 0
+    }
+
+    fn is_write(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_WRITE) != 0
+    }
+
+    fn is_user(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_USER) != 0
+    }
+
+    fn is_reserved_write(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_RESERVED_WRITE) != 0
+    }
+
+    fn is_instruction_fetch(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_INSTRUCTION_FETCH) != 0
+    }
+
+    fn is_protection_key(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_PROTECTION_KEY) != 0
+    }
+
+    fn is_shadow_stack(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_SHADOW_STACK) != 0
+    }
+
+    fn is_software_guard_extensions(&self) -> bool {
+        (self.0 & PAGE_FAULT_ERROR_CODE_MASK_SOFTWARE_GUARD_EXTENSIONS) != 0
+    }
+}
+
+impl fmt::Debug for PageFaultErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:#018x} ({}{}{}{}{})",
+            self.0,
+            if self.is_present() {
+                "page present, "
+            } else {
+                "page not present, "
+            },
+            if self.is_write() {
+                "attemting write, "
+            } else {
+                "attemting read, "
+            },
+            if self.is_instruction_fetch() {
+                "trying to fetch the instruction, "
+            } else {
+                ""
+            },
+            if self.is_user() {
+                "while in user mode, "
+            } else {
+                "while in system mode, "
+            },
+            if self.is_reserved_write() {
+                "page table seems broken."
+            } else {
+                "page table seems valid."
+            },
+        )
+    }
+}
+
+const PAGE_FAULT_ERROR_CODE_MASK_PRESENT: u32 = 0b1 << 0;
+const PAGE_FAULT_ERROR_CODE_MASK_WRITE: u32 = 0b1 << 1;
+const PAGE_FAULT_ERROR_CODE_MASK_USER: u32 = 0b1 << 2;
+const PAGE_FAULT_ERROR_CODE_MASK_RESERVED_WRITE: u32 = 0b1 << 3;
+const PAGE_FAULT_ERROR_CODE_MASK_INSTRUCTION_FETCH: u32 = 0b1 << 4;
+const PAGE_FAULT_ERROR_CODE_MASK_PROTECTION_KEY: u32 = 0b11 << 5;
+const PAGE_FAULT_ERROR_CODE_MASK_SHADOW_STACK: u32 = 0b1 << 7;
+const PAGE_FAULT_ERROR_CODE_MASK_SOFTWARE_GUARD_EXTENSIONS: u32 = 0b1 << 15;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -976,6 +1086,18 @@ const _: () = assert!(size_of::<TaskStateSegment64Inner>() == 104);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test_case]
+    fn test_page_fault_error_code_is_present() {
+        {
+            let present = PageFaultErrorCode(0x1);
+            assert!(present.is_present());
+        }
+        {
+            let not_present = PageFaultErrorCode(0x0);
+            assert!(!not_present.is_present());
+        }
+    }
 
     #[test_case]
     fn test_entry_is_present() {
