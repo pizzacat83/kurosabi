@@ -3,7 +3,7 @@
 #![feature(offset_of)]
 
 use wasabi::graphics::{fill_rect, Bitmap};
-use wasabi::init::init_basic_runtime;
+use wasabi::init::{init_basic_runtime, init_paging};
 use wasabi::print::hexdump;
 use wasabi::println;
 use wasabi::uefi::{
@@ -26,7 +26,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     println!("image_base: {:#018x}", loaded_image.image_base);
     println!("image_size: {:#018x}", loaded_image.image_size);
 
-    let _memory_map = init_basic_runtime(image_handle, efi_system_table);
+    let memory_map = init_basic_runtime(image_handle, efi_system_table);
 
     // let mut total_memory_pages = 0;
     // for e in memory_map.iter() {
@@ -60,7 +60,9 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     println!("Triggering exception...");
     trigger_debug_interrupt();
-    println!("Triggered exception!");
+    println!("Resuming after exception!");
+
+    init_paging(&memory_map);
 
     loop {
         hlt();

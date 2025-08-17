@@ -5,12 +5,12 @@ use core::{
     arch::{asm, global_asm},
     fmt,
     marker::PhantomData,
-    mem::{offset_of, size_of, size_of_val},
+    mem::{offset_of, size_of, size_of_val, MaybeUninit},
     panic,
     pin::Pin,
 };
 
-use crate::{error, info};
+use crate::{error, info, result::Result};
 
 pub fn write_io_port_u8(port: u16, data: u8) {
     unsafe {
@@ -45,6 +45,13 @@ pub fn read_cr3() -> *mut PML4 {
     unsafe { asm!("mov rax, cr3", out("rax") cr3) }
 
     cr3
+}
+
+/// # Safety
+/// Writing to CR3 can causes any exceptions so it is programmer's responsibility to setup correct page tables.
+#[no_mangle]
+pub unsafe fn write_cr3(table: *const PML4) {
+    asm!("mov cr3, rax", in("rax") table)
 }
 
 // ES: Extra Segment
@@ -130,6 +137,12 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> Table<LEVEL, SHIFT, NEXT> {
     pub fn next_level(&self, index: usize) -> Option<&NEXT> {
         self.entries.get(index)?.table()
     }
+
+    /// It is caller's responsibility to ensure addr relates to this entry.
+    fn entry_mut(&mut self, addr: usize) -> &mut Entry<LEVEL, SHIFT, NEXT> {
+        let index = (addr >> SHIFT) & 0x199;
+        &mut self.entries[index]
+    }
 }
 
 #[repr(transparent)]
@@ -154,13 +167,51 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> Entry<LEVEL, SHIFT, NEXT> {
         (self.value & ATTR_USER) != 0
     }
 
+    fn next_addr(&self) -> *mut NEXT {
+        (self.value & !ATTR_MASK) as *mut NEXT
+    }
+
     fn table(&self) -> Option<&NEXT> {
         if !self.is_present() {
             return None;
         }
 
-        Some(unsafe { &*((self.value & !ATTR_MASK) as *const NEXT) })
+        Some(unsafe { &*self.next_addr() })
     }
+
+    fn table_mut(&self) -> Option<&mut NEXT> {
+        if !self.is_present() {
+            return None;
+        }
+
+        Some(unsafe { &mut *self.next_addr() })
+    }
+    // TODO: Why return &mut Self?
+    fn ensure_populated(&mut self) -> Result<&mut Self> {
+        if self.is_present() {
+            Ok(self)
+        } else {
+            self.populate()
+        }
+    }
+
+    fn populate(&mut self) -> Result<&mut Self> {
+        if self.is_present() {
+            return Err("Page is already populated");
+        }
+        // TODO: DRY?
+        // TODO: why MaybeUninit is needed? Why can't we just create a zero value safely?
+        let next: Box<NEXT> = Box::new(unsafe { MaybeUninit::zeroed().assume_init() });
+        self.value = (Box::into_raw(next) as usize) | (PageAttr::ReadWriteKernel as usize);
+        Ok(self)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+#[repr(u64)]
+pub enum PageAttr {
+    NotPresent = 0,
+    ReadWriteKernel = (ATTR_PRESENT | ATTR_WRITABLE) as u64,
 }
 
 impl<const LEVEL: usize, const SHIFT: usize, NEXT> fmt::Debug for Entry<LEVEL, SHIFT, NEXT> {
@@ -192,12 +243,66 @@ impl<const LEVEL: usize, const SHIFT: usize, NEXT> fmt::Debug for Table<LEVEL, S
     }
 }
 
-const PAGE_SIZE: usize = 4096;
+pub const PAGE_SIZE: usize = 4096;
+
+/// The address of the physical page!
+pub type PTEntry = Entry<1, 12, [u8; PAGE_SIZE]>;
 
 pub type PT = Table<1, 12, [u8; PAGE_SIZE]>;
 pub type PD = Table<2, 21, PT>;
 pub type PDPT = Table<3, 30, PD>;
 pub type PML4 = Table<4, 39, PDPT>;
+
+impl PML4 {
+    pub fn new() -> Box<Self> {
+        let this = unsafe { MaybeUninit::zeroed().assume_init() };
+        Box::new(this)
+    }
+
+    // Maps [virt_start:virt_end] to [phys:phys+size].
+    pub fn create_mapping(
+        &mut self,
+        virt_start: u64,
+        virt_end: u64,
+        phys_start: u64,
+        attr: PageAttr,
+    ) -> Result<()> {
+        // TODO: check addresses
+
+        for virt_addr in (virt_start..virt_end).step_by(PAGE_SIZE) {
+            let pdpt = self
+                .entry_mut(virt_addr as usize)
+                .ensure_populated()?
+                .table_mut()
+                .expect("table_mut failed although already populated");
+            let pd = pdpt
+                .entry_mut(virt_addr as usize)
+                .ensure_populated()?
+                .table_mut()
+                .expect("table_mut failed although already populated");
+            let pt = pd
+                .entry_mut(virt_addr as usize)
+                .ensure_populated()?
+                .table_mut()
+                .expect("table_mut failed although already populated");
+            let page_table_entry = pt.entry_mut(virt_addr as usize);
+
+            page_table_entry.set_page((virt_addr - virt_start + phys_start) as usize, attr)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl PTEntry {
+    fn set_page(&mut self, phys_addr: usize, attr: PageAttr) -> Result<()> {
+        if phys_addr & ATTR_MASK != 0 {
+            return Err("phys_addr is not aligned");
+        }
+        self.value = phys_addr | attr as usize;
+        Ok(())
+    }
+}
 
 const ATTR_MASK: usize = 0xfff;
 const ATTR_PRESENT: usize = 1 << 0;
