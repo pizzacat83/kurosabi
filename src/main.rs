@@ -7,8 +7,8 @@ use wasabi::init::init_basic_runtime;
 use wasabi::print::hexdump;
 use wasabi::println;
 use wasabi::uefi::{
-    exit_from_efi_boot_services, init_vram, EfiHandle, EfiMemoryType, EfiSystemTable,
-    MemoryMapHolder,
+    exit_from_efi_boot_services, handle_loaded_image_protocol, init_vram, EfiHandle, EfiMemoryType,
+    EfiSystemTable, MemoryMapHolder,
 };
 use wasabi::x86::{hlt, init_exceptions, trigger_debug_interrupt};
 
@@ -36,6 +36,11 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     // println!("Total: {total_memory_pages} pages = {total_memory_size_mib} MiB");
 
     println!("Hello from the world without boot service!");
+
+    let loaded_image = handle_loaded_image_protocol(image_handle, efi_system_table)
+        .expect("failed to handle loaded image protocol");
+    println!("image_base: {:#018x}", loaded_image.image_base);
+    println!("image_size: {:#018x}", loaded_image.image_size);
 
     // let cr3 = wasabi::x86::read_cr3();
     // println!("{cr3:#p}");
