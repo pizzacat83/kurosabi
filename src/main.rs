@@ -5,12 +5,12 @@
 use wasabi::graphics::{fill_rect, Bitmap};
 use wasabi::init::init_basic_runtime;
 use wasabi::print::hexdump;
-use wasabi::println;
 use wasabi::uefi::{
     exit_from_efi_boot_services, handle_loaded_image_protocol, init_vram, EfiHandle, EfiMemoryType,
     EfiSystemTable, MemoryMapHolder,
 };
 use wasabi::x86::{hlt, init_exceptions, trigger_debug_interrupt};
+use wasabi::{info, println};
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -57,6 +57,9 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
     println!("Initializing IDT...");
     // TODO: Is the reason of unmeaningful assignment here to prevent drop?
     let (_gdt, _idt) = init_exceptions();
+
+    let a = 1;
+    info!("The address in normal kernel stack: {:?}", &a as *const i32);
 
     println!("Triggering exception...");
     trigger_debug_interrupt();

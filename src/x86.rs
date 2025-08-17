@@ -323,6 +323,9 @@ extern "sysv64" fn int_handler_unimplemented() {
 ///    
 #[no_mangle]
 extern "sysv64" fn inthandler(info: &InterruptInfo, interrupt_number: usize) {
+    let a = 1;
+    info!("The address in inthandler stack: {:?}", &a as *const i32);
+
     error!("Interrupt Info: {:?}", info);
     error!("Exception {interrupt_number:#04x}: ");
     match interrupt_number {
@@ -736,8 +739,14 @@ impl TaskStateSegment64 {
     fn new() -> Self {
         let rsp0 = unsafe { Self::alloc_interrupt_stack() };
         let mut ist = [0u64; 8];
-        for ist in ist[1..=7].iter_mut() {
+        for (i, ist) in ist[1..=7].iter_mut().enumerate() {
             *ist = unsafe { Self::alloc_interrupt_stack() };
+            info!(
+                "IST #{}: {:#018x}:{:#018x}",
+                i + 1,
+                *ist - HANDLER_STACK_SIZE as u64,
+                *ist
+            );
         }
         let tss64 = TaskStateSegment64Inner {
             _reserved0: 0,
@@ -762,7 +771,6 @@ impl TaskStateSegment64 {
 
     // TODO: how unsafe?
     unsafe fn alloc_interrupt_stack() -> u64 {
-        const HANDLER_STACK_SIZE: usize = 64 * 1024;
         let stack = Box::new([0u8; HANDLER_STACK_SIZE]);
         let rsp = unsafe { stack.as_ptr().add(HANDLER_STACK_SIZE) as u64 };
 
@@ -773,6 +781,7 @@ impl TaskStateSegment64 {
     }
 }
 
+const HANDLER_STACK_SIZE: usize = 64 * 1024;
 #[repr(C, packed)]
 pub struct TaskStateSegment64Inner {
     _reserved0: u32,
