@@ -10,7 +10,7 @@ use wasabi::uefi::{
     EfiSystemTable, MemoryMapHolder,
 };
 use wasabi::x86::{hlt, init_exceptions, trigger_debug_interrupt};
-use wasabi::{info, println};
+use wasabi::{executor, info, println};
 
 #[no_mangle]
 fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
@@ -64,25 +64,7 @@ fn efi_main(image_handle: EfiHandle, efi_system_table: &EfiSystemTable) {
 
     init_paging(&memory_map);
 
-    let task1 = Task::new(async {
-        for i in 100..=103 {
-            info!("{i}");
-            yield_execution().await;
-        }
-        Ok(())
-    });
-    let task2 = Task::new(async {
-        for i in 200..=203 {
-            info!("{i}");
-            yield_execution().await;
-        }
-        Ok(())
-    });
-
-    let mut executor = Executor::new();
-    executor.enqueue(task1);
-    executor.enqueue(task2);
-    Executor::run(executor);
+    executor::demo();
 
     loop {
         hlt();
