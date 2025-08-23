@@ -8,8 +8,9 @@ use core::{
     future::Future,
     panic::Location,
     pin::Pin,
+    ptr::null,
     sync::atomic::{AtomicBool, Ordering},
-    task::{Context, Poll},
+    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
 pub fn demo() {
@@ -83,7 +84,8 @@ impl Executor {
         loop {
             let task = executor.task_queue().pop_front();
             if let Some(mut task) = task {
-                let context = ();
+                let waker = no_op_waker();
+                let mut context = Context::from_waker(&waker);
                 match task.poll(&mut context) {
                     Poll::Ready(v) => {
                         info!("Task completed: {task:?}: {v:?}")
@@ -96,6 +98,19 @@ impl Executor {
             }
         }
     }
+}
+
+fn no_op_waker() -> Waker {
+    unsafe { Waker::from_raw(no_op_raw_waker()) }
+}
+
+fn no_op_raw_waker() -> RawWaker {
+    fn no_op(_: *const ()) {}
+    fn clone(_: *const ()) -> RawWaker {
+        no_op_raw_waker()
+    }
+    let vtable = &RawWakerVTable::new(clone, no_op, no_op, no_op);
+    RawWaker::new(null(), vtable)
 }
 
 async fn yield_execution() {
