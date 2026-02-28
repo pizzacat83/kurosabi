@@ -1,3 +1,115 @@
+#[repr(C, packed)]
+struct DescriptorTablePointer {
+    limit: u16,
+    base: u64,
+}
+
+/// Prints segment register values and GDT base using inline assembly.
+pub fn print_segment_info() {
+    let (cs, ss, ds, es, fs, gs): (u16, u16, u16, u16, u16, u16);
+    unsafe {
+        asm!(
+            "mov {0:x}, cs",
+            "mov {1:x}, ss",
+            "mov {2:x}, ds",
+            "mov {3:x}, es",
+            "mov {4:x}, fs",
+            "mov {5:x}, gs",
+            out(reg) cs,
+            out(reg) ss,
+            out(reg) ds,
+            out(reg) es,
+            out(reg) fs,
+            out(reg) gs,
+        );
+    }
+
+    let mut gdt_ptr = DescriptorTablePointer { limit: 0, base: 0 };
+    unsafe {
+        asm!(
+            "sgdt [{}]",
+            in(reg) &mut gdt_ptr,
+            options(nostack, preserves_flags)
+        );
+    }
+
+    println!("Segment Registers:");
+    print_segment_attr("CS", cs);
+    print_segment_attr("SS", ss);
+    print_segment_attr("DS", ds);
+    print_segment_attr("ES", es);
+    print_segment_attr("FS", fs);
+    print_segment_attr("GS", gs);
+    let gdt_base = gdt_ptr.base;
+    let gdt_limit = gdt_ptr.limit;
+    println!("GDT Base: {:#018x}, Limit: {:#06x}", gdt_base, gdt_limit);
+}
+
+/// Print segment selector and its attributes in a human-readable way
+fn print_segment_attr(name: &str, selector: u16) {
+    // Segment selector: bits 3-15 = index, bits 0-2 = TI/RPL
+    let index = selector >> 3;
+    let rpl = selector & 0b11;
+    let ti = (selector >> 2) & 0b1;
+    println!(
+        "  {}: {:#06x} (index={}, TI={}, RPL={}",
+        name, selector, index, ti, rpl
+    );
+    println!(
+        "     -> RPL={}, Table={} ({}) )",
+        rpl,
+        if ti == 0 { "GDT" } else { "LDT" },
+        if ti == 0 { "Global" } else { "Local" }
+    );
+
+    // Try to read GDT entry and decode Access Byte (PDDSECRA)
+    // Only works for GDT (TI==0)
+    if ti == 0 {
+        // GDT base is global, so we need to get it from SGDT
+        let gdt_ptr = get_gdt_ptr();
+        let gdt_base = gdt_ptr.base as *const u8;
+        let entry_offset = (index as usize) * 8;
+        unsafe {
+            let entry = core::ptr::read_unaligned(gdt_base.add(entry_offset) as *const u64);
+            let access_byte = ((entry >> 40) & 0xff) as u8;
+            let flags = ((entry >> 52) & 0xf) as u8;
+            println!("     GDT[{}] Access Byte: {:#010b}", index, access_byte);
+            println!("       P: {}", (access_byte >> 7) & 1);
+            println!("       DPL: {}", (access_byte >> 5) & 0b11);
+            println!(
+                "       S: {} ({})",
+                (access_byte >> 4) & 1,
+                if (access_byte >> 4) & 1 == 1 {
+                    "code/data"
+                } else {
+                    "system"
+                }
+            );
+            println!("       E: {}", (access_byte >> 3) & 1);
+            println!("       C: {}", (access_byte >> 2) & 1);
+            println!("       R: {}", (access_byte >> 1) & 1);
+            println!("       A: {}", access_byte & 1);
+            println!("     Flags: {:#06b}", flags);
+            println!("       G: {}", (flags >> 3) & 1);
+            println!("       D: {}", (flags >> 2) & 1);
+            println!("       L: {}", (flags >> 1) & 1);
+            println!("       AVL: {}", flags & 1);
+        }
+    }
+}
+
+fn get_gdt_ptr() -> DescriptorTablePointer {
+    let mut gdt_ptr = DescriptorTablePointer { limit: 0, base: 0 };
+    unsafe {
+        asm!(
+            "sgdt [{}]",
+            in(reg) &mut gdt_ptr,
+            options(nostack, preserves_flags)
+        );
+    }
+    gdt_ptr
+}
+
 extern crate alloc;
 
 use alloc::boxed::Box;
@@ -405,6 +517,8 @@ const ATTR_WRITE_THROUGH: usize = 1 << 3;
 const ATTR_CACHE_DISABLE: usize = 1 << 4;
 
 pub fn init_exceptions() -> (GdtWrapper, Idt) {
+    print_segment_info();
+
     let gdt = GdtWrapper::new();
     gdt.load();
 
@@ -418,6 +532,8 @@ pub fn init_exceptions() -> (GdtWrapper, Idt) {
     }
 
     let idt = Idt::new(SEGMENT_SELECTOR_KERNEL_CODE);
+
+    print_segment_info();
     (gdt, idt)
 }
 
